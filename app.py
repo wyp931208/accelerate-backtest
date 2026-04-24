@@ -178,6 +178,12 @@ with tab1:
             )
 
     # 回测执行
+    st.info("💡 **提示**：如果回测显示"未产生有效交易"，请尝试：\n"
+            "1. 降低量比下限（如1.0）或扩大量比上限（如5.0）\n"
+            "2. 降低累计涨幅下限（如10%）\n"
+            "3. 降低上影线比例下限（如0.10）\n"
+            "4. 取消"要求收盘高于VWAP"\n"
+            "5. 扩大日期范围以覆盖更多交易日")
     if st.button("🚀 开始回测", type="primary", use_container_width=True):
         params = {
             "buy_amount": buy_amount,

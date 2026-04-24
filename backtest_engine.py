@@ -51,13 +51,20 @@ def precompute_signals(daily: pd.DataFrame, params: dict) -> pd.DataFrame:
         (df[close_col] >= df["limit_up_price"] * 0.995)
     )
 
-    # 量比（如果API已有volume_ratio则直接用，否则用前日成交量计算）
+    # 量比（如果API已有volume_ratio且非全NaN则直接用，否则用前日成交量计算）
     if 'volume_ratio' not in df.columns or df['volume_ratio'].isna().all():
         df["prev_vol"] = df.groupby("ts_code")["vol"].shift(1)
         df["volume_ratio"] = np.where(
             df["prev_vol"] > 0, df["vol"] / df["prev_vol"], 0.0
         )
     else:
+        # API有量比数据，但对NaN值用前日成交量比补全
+        if df['volume_ratio'].isna().any():
+            df["prev_vol"] = df.groupby("ts_code")["vol"].shift(1)
+            calc_vr = np.where(
+                df["prev_vol"] > 0, df["vol"] / df["prev_vol"], 0.0
+            )
+            df["volume_ratio"] = df["volume_ratio"].fillna(pd.Series(calc_vr, index=df.index))
         df["volume_ratio"] = df["volume_ratio"].fillna(0.0)
 
     # 上影线比例
@@ -341,6 +348,36 @@ def run_backtest(daily: pd.DataFrame, params: dict,
     signals = signals[signals["trade_date"] <= pd.to_datetime(end_date)]
 
     if signals.empty:
+        # 诊断：逐步检查各过滤条件，帮助用户调整参数
+        _pct_min = params.get("pct_chg_min", 2.0)
+        _pct_max = params.get("pct_chg_max", 8.0)
+        _vr_min = params.get("volume_ratio_min", 1.5)
+        _vr_max = params.get("volume_ratio_max", 2.5)
+        _us_min = params.get("upper_shadow_ratio_min", 0.25)
+        _us_max = params.get("upper_shadow_ratio_max", 0.5)
+        _cum_min = params.get("cum_pct_chg_min", 20.0)
+        _cum_max = params.get("cum_pct_chg_max", 100.0)
+        all_cyb = df[df["ts_code"].str.startswith("300")]
+        diag = {
+            "创业板总记录": len(all_cyb),
+            "非ST": len(all_cyb[~all_cyb["is_st"]]),
+            "非次新股": len(all_cyb[~all_cyb["is_new"]]),
+            "非停牌": len(all_cyb[~all_cyb["is_suspended"]]),
+            f"涨跌幅>={_pct_min}%": len(all_cyb[all_cyb["pct_chg"] >= _pct_min]),
+            f"涨跌幅<={_pct_max}%": len(all_cyb[all_cyb["pct_chg"] <= _pct_max]),
+            f"量比>={_vr_min}": len(all_cyb[all_cyb["volume_ratio"] >= _vr_min]),
+            f"量比<={_vr_max}": len(all_cyb[all_cyb["volume_ratio"] <= _vr_max]),
+            f"上影线>={_us_min}": len(all_cyb[all_cyb["upper_shadow_ratio"] >= _us_min]),
+            f"上影线<={_us_max}": len(all_cyb[all_cyb["upper_shadow_ratio"] <= _us_max]),
+            "收盘>VWAP": len(all_cyb[all_cyb["close_above_vwap"]]),
+            f"累计涨幅>{_cum_min}%": len(all_cyb[all_cyb["cum_pct_chg_N"] > _cum_min]),
+            f"累计涨幅<={_cum_max}%": len(all_cyb[all_cyb["cum_pct_chg_N"] <= _cum_max]),
+        }
+        diag_msg = "信号筛选诊断（创业板逐条件过滤后剩余数量）：\n"
+        for k, v in diag.items():
+            diag_msg += f"  {k}: {v}\n"
+        import streamlit as st
+        st.warning(f"未检测到信号。请尝试放宽筛选条件（如降低量比下限、降低累计涨幅下限等）。\n\n{diag_msg}")
         return pd.DataFrame(), pd.DataFrame(), signals
 
     # 收集交易
