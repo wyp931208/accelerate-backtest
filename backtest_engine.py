@@ -39,6 +39,10 @@ def precompute_signals(daily: pd.DataFrame, params: dict) -> pd.DataFrame:
     """
     df = daily.copy()
 
+    # 确保按股票代码和日期排序，rolling计算依赖此顺序
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    df = df.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
+
     # 涨停判断（使用原始价格，因为涨跌幅限制基于除权价格）
     cond_cyb = df["ts_code"].str.startswith("300")
     # 如果存在不复权价格列，优先使用（复权数据时使用原始价格判断涨停更准确）
@@ -101,7 +105,7 @@ def precompute_signals(daily: pd.DataFrame, params: dict) -> pd.DataFrame:
         df["is_st"] = df["name"].str.upper().str.contains("ST", na=False) if 'name' in df.columns else False
 
     # 次新股
-    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    # trade_date已在函数开头转为datetime
     df["list_date"] = pd.to_datetime(df["list_date"], errors="coerce")
     df["is_new"] = df.apply(
         lambda row: is_new_stock(row.get("list_date"), row["trade_date"]), axis=1
