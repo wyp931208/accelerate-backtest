@@ -357,7 +357,7 @@ def run_backtest(daily: pd.DataFrame, params: dict,
         _us_max = params.get("upper_shadow_ratio_max", 0.5)
         _cum_min = params.get("cum_pct_chg_min", 20.0)
         _cum_max = params.get("cum_pct_chg_max", 100.0)
-        all_cyb = df[df["ts_code"].str.startswith("300")]
+        all_cyb = daily[daily["ts_code"].str.startswith("300")]
         diag = {
             "创业板总记录": len(all_cyb),
             "非ST": len(all_cyb[~all_cyb["is_st"]]),
