@@ -641,10 +641,24 @@ with tab3:
 # 页脚
 # ======================
 st.markdown("---")
-st.markdown(
-    "<div style='text-align: center; color: gray; font-size: 12px;'>"
-    "XPK加速策略回测系统 | 数据来源: Tushare Pro | "
-    "仅供学习研究，不构成投资建议"
-    "</div>",
-    unsafe_allow_html=True
-)
+footer_col1, footer_col2 = st.columns([3, 1])
+with footer_col1:
+    st.markdown(
+        "<div style='text-align: center; color: gray; font-size: 12px;'>"
+        "XPK加速策略回测系统 | 数据来源: Tushare Pro | "
+        "仅供学习研究，不构成投资建议"
+        "</div>",
+        unsafe_allow_html=True
+    )
+with footer_col2:
+    # 用户手册下载
+    manual_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_manual.md")
+    if os.path.exists(manual_path):
+        with open(manual_path, "r", encoding="utf-8") as f:
+            manual_content = f.read()
+        st.download_button(
+            "📖 下载用户手册",
+            data=manual_content,
+            file_name="XPK加速策略用户手册.md",
+            mime="text/markdown"
+        )
