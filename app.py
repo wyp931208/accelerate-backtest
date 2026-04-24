@@ -71,10 +71,9 @@ def to_excel(df: pd.DataFrame) -> bytes:
         # 自动调整列宽
         worksheet = writer.sheets['Sheet1']
         for i, col in enumerate(df.columns):
-            max_len = max(
-                df[col].astype(str).map(len).max(),
-                len(str(col))
-            )
+            col_values = df[col].to_numpy(dtype=object, na_value='')
+            str_lens = [len(str(v)) for v in col_values]
+            max_len = max(max(str_lens, default=0), len(str(col)))
             col_letter = get_column_letter(i + 1)
             worksheet.column_dimensions[col_letter].width = min(max_len + 2, 30)
     output.seek(0)
