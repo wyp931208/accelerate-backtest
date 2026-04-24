@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Streamlit secrets (含Token，不能上传)
+.streamlit/secrets.toml
+
+# 内部文件（不上传）
+XPK加速策略.py
+tushare_python_guide.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+*.db
+*.sqlite3
+
+# Output
+输出*/
+加速策略_*/
