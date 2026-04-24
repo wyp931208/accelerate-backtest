@@ -501,6 +501,13 @@ def detect_daily_signals(trade_date: str, params: dict) -> pd.DataFrame:
 
     for i, row in enumerate(pre_filtered):
         ts_code = row["ts_code"]
+        # 从当前row重新提取字段，避免使用外层循环残留的变量
+        row_pct = row["pct_chg"]
+        row_vr = row.get("volume_ratio", 0)
+        row_upper_shadow = row["upper_shadow_ratio"]
+        row_close = row["close"]
+        row_vwap = row["vwap"]
+
         hist = get_daily_data(ts_code=ts_code, end_date=trade_date)
         if hist.empty or len(hist) < n_days_lookback:
             continue
@@ -525,12 +532,12 @@ def detect_daily_signals(trade_date: str, params: dict) -> pd.DataFrame:
                 "股票名称": row.get("name", ""),
                 "板块": "创业板",
                 "信号日": trade_date,
-                "涨跌幅(%)": pct,
-                "量比": round(vr, 2),
-                "上影线比例": round(upper_shadow, 4),
+                "涨跌幅(%)": row_pct,
+                "量比": round(row_vr, 2),
+                "上影线比例": round(row_upper_shadow, 4),
                 "前N日累计涨幅(%)": round(cum_pct, 2),
-                "收盘价": close,
-                "VWAP": round(vwap, 2),
+                "收盘价": row_close,
+                "VWAP": round(row_vwap, 2),
                 "成交量(手)": row.get("vol", 0),
                 "成交额(千元)": row.get("amount", 0),
             })
