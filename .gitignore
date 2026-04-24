@@ -7,8 +7,8 @@ dist/
 build/
 *.egg
 
-# Streamlit secrets (含Token，不能上传)
-.streamlit/secrets.toml
+# Streamlit secrets
+# .streamlit/secrets.toml
 
 # 内部文件（不上传）
 XPK加速策略.py
