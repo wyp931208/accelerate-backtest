@@ -2,12 +2,14 @@
 """
 PDF导出模块
 将K线图表导出为PDF文件
+每页只放一个图表（日K线或周K线），日周分开，排版美观
 """
 from io import BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Image, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import (SimpleDocTemplate, Image, Paragraph, Spacer,
+                                 Table, TableStyle, PageBreak)
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -51,13 +53,10 @@ def get_chinese_font():
     return 'Helvetica'
 
 
-def export_charts_to_pdf(chart_buffers: list, stock_info: dict,
-                          output_buffer: BytesIO = None) -> BytesIO:
+def _build_pdf(stocks_data: list, output_buffer: BytesIO = None) -> BytesIO:
     """
-    将图表导出为PDF
-    chart_buffers: list of BytesIO (PNG images)
-    stock_info: dict with ts_code, name, etc.
-    output_buffer: optional BytesIO to write to
+    通用PDF构建函数
+    每只股票的日K线和周K线各占一页，排版清晰美观
     """
     if output_buffer is None:
         output_buffer = BytesIO()
@@ -65,20 +64,26 @@ def export_charts_to_pdf(chart_buffers: list, stock_info: dict,
     font_name = get_chinese_font()
     styles = getSampleStyleSheet()
 
-    # 创建自定义样式
+    # 自定义样式
     title_style = ParagraphStyle(
-        'ChineseTitle',
-        parent=styles['Title'],
-        fontName=font_name,
-        fontSize=16,
-        spaceAfter=6 * mm,
+        'ChineseTitle', parent=styles['Title'],
+        fontName=font_name, fontSize=18, spaceAfter=4 * mm,
+        alignment=1,  # 居中
     )
     subtitle_style = ParagraphStyle(
-        'ChineseSubtitle',
-        parent=styles['Normal'],
-        fontName=font_name,
-        fontSize=10,
-        spaceAfter=4 * mm,
+        'ChineseSubtitle', parent=styles['Normal'],
+        fontName=font_name, fontSize=10, spaceAfter=3 * mm,
+        alignment=1,
+    )
+    chart_title_daily = ParagraphStyle(
+        'ChartTitleDaily', parent=styles['Normal'],
+        fontName=font_name, fontSize=12, spaceAfter=2 * mm,
+        textColor=colors.HexColor('#ef5350'),  # 日线-红色标题
+    )
+    chart_title_weekly = ParagraphStyle(
+        'ChartTitleWeekly', parent=styles['Normal'],
+        fontName=font_name, fontSize=12, spaceAfter=2 * mm,
+        textColor=colors.HexColor('#1565C0'),  # 周线-蓝色标题
     )
 
     doc = SimpleDocTemplate(
@@ -91,111 +96,113 @@ def export_charts_to_pdf(chart_buffers: list, stock_info: dict,
     )
 
     story = []
+    page_width = A4[0] - 30 * mm  # 可用宽度
+    chart_height = page_width * 0.82  # 图表高度，让一页正好放下
 
-    # 标题
-    ts_code = stock_info.get('ts_code', '')
-    name = stock_info.get('name', '')
-    signal_date = stock_info.get('signal_date', '')
+    is_multi = len(stocks_data) > 1
 
-    story.append(Paragraph(f'{name} ({ts_code}) 加速策略分析报告', title_style))
-    story.append(Paragraph(f'信号日期: {signal_date}', subtitle_style))
+    # 多股票时添加总封面
+    if is_multi:
+        story.append(Spacer(1, 60 * mm))
+        story.append(Paragraph('XPK加速策略', title_style))
+        story.append(Paragraph('信号股票分析报告', ParagraphStyle(
+            'SubTitle2', parent=styles['Normal'],
+            fontName=font_name, fontSize=14, spaceAfter=8 * mm, alignment=1,
+        )))
+        story.append(Spacer(1, 10 * mm))
+        # 股票列表
+        for sd in stocks_data:
+            info = sd.get('stock_info', {})
+            line = f"{info.get('name', '')} ({info.get('ts_code', '')})  板块: {info.get('board', '')}  信号日: {info.get('signal_date', '')}"
+            story.append(Paragraph(line, ParagraphStyle(
+                'StockList', parent=styles['Normal'],
+                fontName=font_name, fontSize=10, spaceAfter=3 * mm, alignment=1,
+            )))
+        story.append(PageBreak())
 
-    # 股票基本信息表格
-    info_data = [
-        ['股票代码', ts_code, '股票名称', name],
-        ['信号日期', str(signal_date), '板块', stock_info.get('board', '')],
-    ]
-    info_table = Table(info_data, colWidths=[30 * mm, 50 * mm, 30 * mm, 50 * mm])
-    info_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, -1), font_name),
-        ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('BACKGROUND', (0, 0), (0, -1), colors.Color(0.9, 0.95, 1)),
-        ('BACKGROUND', (2, 0), (2, -1), colors.Color(0.9, 0.95, 1)),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-    ]))
-    story.append(info_table)
-    story.append(Spacer(1, 8 * mm))
-
-    # 插入图表
-    page_width = A4[0] - 30 * mm  # 减去左右边距
-    for i, buf in enumerate(chart_buffers):
-        chart_type = "日K线" if i == 0 else "周K线"
-        story.append(Paragraph(f'{chart_type}技术分析图表', subtitle_style))
-        buf.seek(0)
-        try:
-            img = Image(buf, width=page_width, height=page_width * 0.85)
-            story.append(img)
-        except Exception:
-            story.append(Paragraph(f'[图表{i+1}生成失败]', subtitle_style))
-        story.append(Spacer(1, 5 * mm))
-
-    doc.build(story)
-    output_buffer.seek(0)
-    return output_buffer
-
-
-def export_multi_stocks_pdf(stocks_data: list, output_buffer: BytesIO = None) -> BytesIO:
-    """
-    批量导出多只股票的PDF
-    stocks_data: list of dict, each with keys:
-        - chart_buffers: list of BytesIO
-        - stock_info: dict
-    """
-    if output_buffer is None:
-        output_buffer = BytesIO()
-
-    font_name = get_chinese_font()
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        'ChineseTitle',
-        parent=styles['Title'],
-        fontName=font_name,
-        fontSize=16,
-    )
-    subtitle_style = ParagraphStyle(
-        'ChineseSubtitle',
-        parent=styles['Normal'],
-        fontName=font_name,
-        fontSize=10,
-    )
-
-    doc = SimpleDocTemplate(
-        output_buffer,
-        pagesize=A4,
-        topMargin=15 * mm,
-        bottomMargin=15 * mm,
-        leftMargin=15 * mm,
-        rightMargin=15 * mm,
-    )
-
-    story = []
-    story.append(Paragraph('XPK加速策略 - 信号股票分析报告', title_style))
-    story.append(Spacer(1, 10 * mm))
-
-    page_width = A4[0] - 30 * mm
-
-    for stock_data in stocks_data:
+    for idx, stock_data in enumerate(stocks_data):
         chart_buffers = stock_data.get('chart_buffers', [])
         stock_info = stock_data.get('stock_info', {})
 
         ts_code = stock_info.get('ts_code', '')
         name = stock_info.get('name', '')
         signal_date = stock_info.get('signal_date', '')
+        board = stock_info.get('board', '')
 
-        story.append(Paragraph(f'{name} ({ts_code})', subtitle_style))
+        # 每只股票的开头（第一页：信息 + 日K线）
+        # 股票名称标题
+        story.append(Paragraph(f'{name} ({ts_code})', title_style))
+        story.append(Paragraph(f'信号日期: {signal_date}  |  板块: {board}', subtitle_style))
+        story.append(Spacer(1, 2 * mm))
 
-        for j, buf in enumerate(chart_buffers):
-            chart_type = "日K线" if j == 0 else "周K线"
+        # 基本信息表格
+        info_data = [
+            ['股票代码', ts_code, '股票名称', name],
+            ['信号日期', str(signal_date), '板块', board],
+        ]
+        info_table = Table(info_data, colWidths=[30 * mm, 50 * mm, 30 * mm, 50 * mm])
+        info_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BACKGROUND', (0, 0), (0, -1), colors.Color(0.9, 0.95, 1)),
+            ('BACKGROUND', (2, 0), (2, -1), colors.Color(0.9, 0.95, 1)),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        story.append(info_table)
+        story.append(Spacer(1, 4 * mm))
+
+        # ---- 日K线图（第一页） ----
+        if len(chart_buffers) >= 1:
+            story.append(Paragraph('▶ 日K线技术分析（红绿配色）', chart_title_daily))
+            story.append(Spacer(1, 2 * mm))
+            buf = chart_buffers[0]
             buf.seek(0)
             try:
-                img = Image(buf, width=page_width, height=page_width * 0.7)
+                img = Image(buf, width=page_width, height=chart_height)
                 story.append(img)
             except Exception:
-                pass
+                story.append(Paragraph('[日K线图表生成失败]', subtitle_style))
+
+        # ---- 周K线图（第二页） ----
+        if len(chart_buffers) >= 2:
+            story.append(PageBreak())
+            story.append(Paragraph(f'{name} ({ts_code})', subtitle_style))
+            story.append(Spacer(1, 2 * mm))
+            story.append(Paragraph('▶ 周K线技术分析（蓝橙配色）', chart_title_weekly))
+            story.append(Spacer(1, 2 * mm))
+            buf = chart_buffers[1]
+            buf.seek(0)
+            try:
+                img = Image(buf, width=page_width, height=chart_height)
+                story.append(img)
+            except Exception:
+                story.append(Paragraph('[周K线图表生成失败]', subtitle_style))
+
+        # 多股票时，每只股票之间分页
+        if idx < len(stocks_data) - 1:
+            story.append(PageBreak())
 
     doc.build(story)
     output_buffer.seek(0)
     return output_buffer
+
+
+def export_charts_to_pdf(chart_buffers: list, stock_info: dict,
+                          output_buffer: BytesIO = None) -> BytesIO:
+    """
+    单只股票导出PDF
+    """
+    return _build_pdf([{
+        'chart_buffers': chart_buffers,
+        'stock_info': stock_info,
+    }], output_buffer)
+
+
+def export_multi_stocks_pdf(stocks_data: list, output_buffer: BytesIO = None) -> BytesIO:
+    """
+    批量导出多只股票的PDF
+    """
+    return _build_pdf(stocks_data, output_buffer)
