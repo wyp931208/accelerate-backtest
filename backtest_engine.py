@@ -416,21 +416,51 @@ def detect_daily_signals(trade_date: str, params: dict) -> pd.DataFrame:
         daily["vol"] > 0, daily["amount"] / daily["vol"], daily["close"]
     )
 
-    # 前N日累计涨幅（需要更多历史数据）
-    # 这里简化处理：获取该股票近N+5日数据来计算
+    # 信号过滤参数
+    volume_ratio_min = params.get("volume_ratio_min", 1.5)
+    volume_ratio_max = params.get("volume_ratio_max", 2.5)
+    pct_chg_min = params.get("pct_chg_min", 2.0)
+    pct_chg_max = params.get("pct_chg_max", 8.0)
+    upper_shadow_ratio_min = params.get("upper_shadow_ratio_min", 0.25)
+    upper_shadow_ratio_max = params.get("upper_shadow_ratio_max", 0.5)
     n_days_lookback = params.get("n_days_lookback", 20)
     cum_pct_min = params.get("cum_pct_chg_min", 20.0)
     cum_pct_max = params.get("cum_pct_chg_max", 100.0)
+    require_close_above_vwap = params.get("require_close_above_vwap", True)
+    close_above_vwap_pct = params.get("close_above_vwap_pct", 0.3)
 
-    # 由于单日数据无法直接计算滚动累计涨幅，
-    # 需要逐股票获取历史数据
-    from data_service import get_daily_data
-    results = []
+    # 第一步：先用基本条件（涨跌幅、量比、上影线、ST、停牌、VWAP）快速过滤
+    # 这些条件用当日数据即可判断，无需额外API调用
     cyb_stocks = daily[daily["ts_code"].str.startswith("300")]
 
+    pre_filtered = []
     for _, row in cyb_stocks.iterrows():
+        upper_shadow = row["upper_shadow_ratio"]
+        vr = row.get("volume_ratio", 0)
+        pct = row["pct_chg"]
+        vwap = row["vwap"]
+        close = row["close"]
+
+        close_above = True
+        if require_close_above_vwap and close_above_vwap_pct > 0:
+            close_above = close >= vwap * (1 + close_above_vwap_pct / 100)
+        elif require_close_above_vwap:
+            close_above = close >= vwap
+
+        if (not row.get("is_st", False) and
+            not row.get("is_suspended", False) and
+            pct >= pct_chg_min and pct <= pct_chg_max and
+            vr >= volume_ratio_min and vr <= volume_ratio_max and
+            upper_shadow >= upper_shadow_ratio_min and upper_shadow <= upper_shadow_ratio_max and
+            close_above):
+            pre_filtered.append(row)
+
+    # 第二步：仅对通过初筛的股票查询历史数据，计算累计涨幅
+    from data_service import get_daily_data
+    results = []
+
+    for i, row in enumerate(pre_filtered):
         ts_code = row["ts_code"]
-        # 获取近N+5日数据
         hist = get_daily_data(ts_code=ts_code, end_date=trade_date)
         if hist.empty or len(hist) < n_days_lookback:
             continue
@@ -444,36 +474,7 @@ def detect_daily_signals(trade_date: str, params: dict) -> pd.DataFrame:
         if pd.isna(cum_pct):
             continue
 
-        # 信号过滤
-        volume_ratio_min = params.get("volume_ratio_min", 1.5)
-        volume_ratio_max = params.get("volume_ratio_max", 2.5)
-        pct_chg_min = params.get("pct_chg_min", 2.0)
-        pct_chg_max = params.get("pct_chg_max", 8.0)
-        upper_shadow_ratio_min = params.get("upper_shadow_ratio_min", 0.25)
-        upper_shadow_ratio_max = params.get("upper_shadow_ratio_max", 0.5)
-
-        upper_shadow = row["upper_shadow_ratio"]
-        vr = row.get("volume_ratio", 0)
-        pct = row["pct_chg"]
-        vwap = row["vwap"]
-        close = row["close"]
-
-        require_close_above_vwap = params.get("require_close_above_vwap", True)
-        close_above_vwap_pct = params.get("close_above_vwap_pct", 0.3)
-
-        close_above = True
-        if require_close_above_vwap and close_above_vwap_pct > 0:
-            close_above = close >= vwap * (1 + close_above_vwap_pct / 100)
-        elif require_close_above_vwap:
-            close_above = close >= vwap
-
-        if (not row.get("is_st", False) and
-            not row.get("is_suspended", False) and
-            pct >= pct_chg_min and pct <= pct_chg_max and
-            vr >= volume_ratio_min and vr <= volume_ratio_max and
-            upper_shadow >= upper_shadow_ratio_min and upper_shadow <= upper_shadow_ratio_max and
-            close_above and
-            cum_pct > cum_pct_min and cum_pct <= cum_pct_max):
+        if cum_pct > cum_pct_min and cum_pct <= cum_pct_max:
 
             is_new = is_new_stock(row.get("list_date"), pd.to_datetime(trade_date))
             if is_new:
