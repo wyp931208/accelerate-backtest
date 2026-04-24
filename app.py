@@ -63,21 +63,40 @@ with st.sidebar:
 # 工具函数
 # ======================
 def to_excel(df: pd.DataFrame) -> bytes:
-    """将DataFrame导出为Excel字节流"""
+    """将DataFrame导出为Excel字节流（单Sheet）"""
     from openpyxl.utils import get_column_letter
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Sheet1')
-        # 自动调整列宽
-        worksheet = writer.sheets['Sheet1']
-        for i, col in enumerate(df.columns):
-            col_values = df[col].to_numpy(dtype=object, na_value='')
-            str_lens = [len(str(v)) for v in col_values]
-            max_len = max(max(str_lens, default=0), len(str(col)))
-            col_letter = get_column_letter(i + 1)
-            worksheet.column_dimensions[col_letter].width = min(max_len + 2, 30)
+        _auto_fit_columns(writer.sheets['Sheet1'], df)
     output.seek(0)
     return output.getvalue()
+
+
+def to_excel_multi_sheets(sheets: dict) -> bytes:
+    """
+    将多个DataFrame导出为Excel字节流（多Sheet）
+    sheets: dict, {sheet_name: DataFrame}
+    """
+    from openpyxl.utils import get_column_letter
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for sheet_name, df in sheets.items():
+            df.to_excel(writer, index=False, sheet_name=sheet_name)
+            _auto_fit_columns(writer.sheets[sheet_name], df)
+    output.seek(0)
+    return output.getvalue()
+
+
+def _auto_fit_columns(worksheet, df: pd.DataFrame):
+    """自动调整Excel列宽"""
+    from openpyxl.utils import get_column_letter
+    for i, col in enumerate(df.columns):
+        col_values = df[col].to_numpy(dtype=object, na_value='')
+        str_lens = [len(str(v)) for v in col_values]
+        max_len = max(max(str_lens, default=0), len(str(col)))
+        col_letter = get_column_letter(i + 1)
+        worksheet.column_dimensions[col_letter].width = min(max_len + 2, 30)
 
 # ======================
 # 主导航
@@ -273,9 +292,76 @@ with tab1:
                     hide_index=True
                 )
 
-            # 下载汇总
-            col_dl1, col_dl2 = st.columns(2)
-            with col_dl1:
+            # ── 交易明细大表 ──
+            if not df_all_trades.empty:
+                st.markdown("### 📋 完整交易明细")
+                st.markdown(f"共 **{len(df_all_trades)}** 条交易记录")
+
+                # 筛选控件
+                filter_col1, filter_col2, filter_col3 = st.columns(3)
+                with filter_col1:
+                    pt_options = sorted(df_all_trades["止盈目标(%)"].unique())
+                    selected_pt = st.multiselect(
+                        "止盈目标(%)", pt_options, default=pt_options, key="bt_detail_pt"
+                    )
+                with filter_col2:
+                    board_options = list(df_all_trades["板块"].unique())
+                    selected_boards = st.multiselect(
+                        "板块", board_options, default=board_options, key="bt_detail_board"
+                    )
+                with filter_col3:
+                    sell_type_options = sorted(df_all_trades["卖出方式"].unique())
+                    selected_sell_types = st.multiselect(
+                        "卖出方式", sell_type_options, default=sell_type_options, key="bt_detail_sell_type"
+                    )
+
+                # 应用筛选
+                detail_df = df_all_trades[
+                    df_all_trades["止盈目标(%)"].isin(selected_pt) &
+                    df_all_trades["板块"].isin(selected_boards) &
+                    df_all_trades["卖出方式"].isin(selected_sell_types)
+                ].copy()
+
+                if not detail_df.empty:
+                    # 汇总统计卡片
+                    stat_col1, stat_col2, stat_col3, stat_col4, stat_col5 = st.columns(5)
+                    with stat_col1:
+                        st.metric("交易数", f"{len(detail_df)}")
+                    with stat_col2:
+                        win_count = len(detail_df[detail_df["盈利金额"] > 0])
+                        st.metric("盈利次数", f"{win_count}")
+                    with stat_col3:
+                        wr = win_count / len(detail_df) if len(detail_df) > 0 else 0
+                        st.metric("胜率", f"{wr:.2%}")
+                    with stat_col4:
+                        total_profit = detail_df["盈利金额"].sum()
+                        st.metric("总盈利", f"{total_profit:,.0f}")
+                    with stat_col5:
+                        avg_ret = detail_df["收益率"].mean()
+                        st.metric("平均收益率", f"{avg_ret:.2%}")
+
+                    # 交易明细表格
+                    st.dataframe(
+                        detail_df.style.format({
+                            "收益率": "{:.2%}",
+                            "初始买入价": "{:.3f}",
+                            "卖出价格": "{:.3f}",
+                            "补仓后成本": "{:.2f}",
+                            "补仓价格": "{:.3f}",
+                            "投入金额": "{:,.2f}",
+                            "盈利金额": "{:,.2f}",
+                        }),
+                        use_container_width=True,
+                        hide_index=True,
+                        height=min(600, max(200, len(detail_df) * 35 + 50))
+                    )
+                else:
+                    st.info("当前筛选条件下无交易记录")
+
+            # ── 下载区域 ──
+            st.markdown("### 📥 下载回测结果")
+            dl_col1, dl_col2, dl_col3 = st.columns(3)
+            with dl_col1:
                 summary_xlsx = to_excel(df_summary)
                 st.download_button(
                     "📥 下载回测汇总 (Excel)",
@@ -283,7 +369,7 @@ with tab1:
                     file_name="回测结果汇总.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-            with col_dl2:
+            with dl_col2:
                 if not df_all_trades.empty:
                     trades_xlsx = to_excel(df_all_trades)
                     st.download_button(
@@ -292,33 +378,25 @@ with tab1:
                         file_name="全部交易明细.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
-
-            # 详细交易明细查看
-            if not df_all_trades.empty:
-                st.markdown("### 📋 交易明细查看")
-                pt_options = sorted(df_all_trades["止盈目标(%)"].unique())
-                selected_pt = st.selectbox("选择止盈目标", pt_options, key="bt_detail_pt")
-                board_filter = st.selectbox(
-                    "选择板块", ["全部"] + list(df_all_trades["板块"].unique()),
-                    key="bt_detail_board"
-                )
-
-                detail_df = df_all_trades[df_all_trades["止盈目标(%)"] == selected_pt]
-                if board_filter != "全部":
-                    detail_df = detail_df[detail_df["板块"] == board_filter]
-
-                st.dataframe(
-                    detail_df.style.format({
-                        "收益率": "{:.2%}",
-                        "初始买入价": "{:.3f}",
-                        "卖出价格": "{:.3f}",
-                        "补仓后成本": "{:.2f}",
-                        "投入金额": "{:,.2f}",
-                        "盈利金额": "{:,.2f}",
-                    }),
-                    use_container_width=True,
-                    hide_index=True
-                )
+            with dl_col3:
+                if not df_all_trades.empty:
+                    # 综合Excel：多Sheet包含汇总+各止盈点明细+全部明细
+                    sheets = {"回测汇总": df_summary}
+                    for pt in sorted(df_all_trades["止盈目标(%)"].unique()):
+                        pt_df = df_all_trades[df_all_trades["止盈目标(%)"] == pt]
+                        sheet_name = f"止盈{pt}%"
+                        # Excel sheet名称最长31字符
+                        if len(sheet_name) > 31:
+                            sheet_name = sheet_name[:28] + "..."
+                        sheets[sheet_name] = pt_df.reset_index(drop=True)
+                    sheets["全部交易明细"] = df_all_trades.reset_index(drop=True)
+                    full_xlsx = to_excel_multi_sheets(sheets)
+                    st.download_button(
+                        "📥 下载综合报告 (多Sheet Excel)",
+                        data=full_xlsx,
+                        file_name="XPK加速策略回测报告.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
 
 
 # ============================================================
