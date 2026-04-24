@@ -519,7 +519,7 @@ with tab3:
                                 stocks_data.append({
                                     'chart_buffers': buffers,
                                     'stock_info': r['stock_info']
-                                )
+                                })
 
                     if len(stocks_data) == 1:
                         # 单只股票
