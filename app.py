@@ -426,17 +426,28 @@ with tab2:
 
     # 信号检测参数（与回测共享默认值）
     with st.expander("⚙️ 信号参数设置", expanded=False):
-        col_s1, col_s2 = st.columns(2)
+        col_s1, col_s2, col_s3 = st.columns(3)
         with col_s1:
+            st.markdown("**量比与涨跌幅**")
             sig_vr_min = st.number_input("量比下限", value=1.5, step=0.1, key="sig_vr_min")
             sig_vr_max = st.number_input("量比上限", value=2.5, step=0.1, key="sig_vr_max")
             sig_pct_min = st.number_input("涨跌幅下限(%)", value=2.0, step=0.5, key="sig_pct_min")
             sig_pct_max = st.number_input("涨跌幅上限(%)", value=8.0, step=0.5, key="sig_pct_max")
         with col_s2:
+            st.markdown("**上影线与累计涨幅**")
             sig_us_min = st.number_input("上影线下限", value=0.25, step=0.05, format="%.2f", key="sig_us_min")
             sig_us_max = st.number_input("上影线上限", value=0.50, step=0.05, format="%.2f", key="sig_us_max")
             sig_cum_min = st.number_input("累计涨幅下限(%)", value=20.0, step=5.0, key="sig_cum_min")
             sig_cum_max = st.number_input("累计涨幅上限(%)", value=100.0, step=10.0, key="sig_cum_max")
+        with col_s3:
+            st.markdown("**累计涨幅天数与VWAP**")
+            sig_n_days = st.number_input("前N日累计涨幅(N)", min_value=3, max_value=60, value=20, step=1, key="sig_n_days")
+            sig_req_vwap = st.checkbox("要求收盘高于VWAP", value=True, key="sig_req_vwap")
+            sig_vwap_pct = st.number_input(
+                "收盘高于VWAP百分比(%)", min_value=0.0, max_value=2.0,
+                value=0.3, step=0.1, key="sig_vwap_pct",
+                disabled=not sig_req_vwap
+            )
 
     # 获取最近交易日（已有缓存，首次加载后不会重复请求）
     latest_td = get_latest_trade_date()
@@ -466,9 +477,9 @@ with tab2:
             "upper_shadow_ratio_max": sig_us_max,
             "cum_pct_chg_min": sig_cum_min,
             "cum_pct_chg_max": sig_cum_max,
-            "n_days_lookback": 20,
-            "require_close_above_vwap": True,
-            "close_above_vwap_pct": 0.3,
+            "n_days_lookback": sig_n_days,
+            "require_close_above_vwap": sig_req_vwap,
+            "close_above_vwap_pct": sig_vwap_pct,
         }
 
         with st.spinner("正在检测信号，需要逐股票查询历史数据，请耐心等待..."):
