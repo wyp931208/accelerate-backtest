@@ -341,19 +341,33 @@ with tab1:
                         st.metric("平均收益率", f"{avg_ret:.2%}")
 
                     # 交易明细表格
+                    display_df = detail_df.copy()
+                    # 将None/NaT替换为空字符串，避免style.format报错
+                    for col in ["补仓日期", "补仓价格", "补仓股数"]:
+                        if col in display_df.columns:
+                            display_df[col] = display_df[col].fillna("").astype(object)
+                            display_df[col] = display_df[col].replace({pd.NaT: ""})
+
+                    format_dict = {}
+                    for col, fmt in [
+                        ("收益率", "{:.2%}"),
+                        ("初始买入价", "{:.3f}"),
+                        ("卖出价格", "{:.3f}"),
+                        ("补仓后成本", "{:.2f}"),
+                        ("投入金额", "{:,.2f}"),
+                        ("盈利金额", "{:,.2f}"),
+                    ]:
+                        if col in display_df.columns:
+                            format_dict[col] = fmt
+                    # 补仓价格单独处理：空字符串不格式化
+                    if "补仓价格" in display_df.columns:
+                        format_dict["补仓价格"] = lambda x: f"{x:.3f}" if x != "" and not pd.isna(x) else ""
+
                     st.dataframe(
-                        detail_df.style.format({
-                            "收益率": "{:.2%}",
-                            "初始买入价": "{:.3f}",
-                            "卖出价格": "{:.3f}",
-                            "补仓后成本": "{:.2f}",
-                            "补仓价格": "{:.3f}",
-                            "投入金额": "{:,.2f}",
-                            "盈利金额": "{:,.2f}",
-                        }),
+                        display_df.style.format(format_dict, na_rep=""),
                         use_container_width=True,
                         hide_index=True,
-                        height=min(600, max(200, len(detail_df) * 35 + 50))
+                        height=min(600, max(200, len(display_df) * 35 + 50))
                     )
                 else:
                     st.info("当前筛选条件下无交易记录")
