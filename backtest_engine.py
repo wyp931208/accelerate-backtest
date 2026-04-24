@@ -6,6 +6,7 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # ======================
@@ -495,13 +496,14 @@ def detect_daily_signals(trade_date: str, params: dict) -> pd.DataFrame:
             close_above):
             pre_filtered.append(row)
 
-    # 第二步：仅对通过初筛的股票查询历史数据，计算累计涨幅
+    # 第二步：仅对通过初筛的股票查询历史数据，计算累计涨幅（并行）
     from data_service import get_daily_data
     results = []
+    n_days_lookback = params.get("n_days_lookback", 20)
 
-    for i, row in enumerate(pre_filtered):
+    def _check_one_stock(row):
+        """检查单只股票的累计涨幅条件"""
         ts_code = row["ts_code"]
-        # 从当前row重新提取字段，避免使用外层循环残留的变量
         row_pct = row["pct_chg"]
         row_vr = row.get("volume_ratio", 0)
         row_upper_shadow = row["upper_shadow_ratio"]
@@ -510,24 +512,23 @@ def detect_daily_signals(trade_date: str, params: dict) -> pd.DataFrame:
 
         hist = get_daily_data(ts_code=ts_code, end_date=trade_date)
         if hist.empty or len(hist) < n_days_lookback:
-            continue
+            return None
         hist = hist.sort_values('trade_date')
         hist['cum_pct'] = hist['pct_chg'].rolling(
             window=n_days_lookback, min_periods=n_days_lookback).sum()
         today_data = hist[hist['trade_date'] == trade_date]
         if today_data.empty:
-            continue
+            return None
         cum_pct = today_data['cum_pct'].values[0]
         if pd.isna(cum_pct):
-            continue
+            return None
 
         if cum_pct > cum_pct_min and cum_pct <= cum_pct_max:
-
             is_new = is_new_stock(row.get("list_date"), pd.to_datetime(trade_date))
             if is_new:
-                continue
+                return None
 
-            results.append({
+            return {
                 "ts_code": ts_code,
                 "股票名称": row.get("name", ""),
                 "板块": "创业板",
@@ -540,6 +541,15 @@ def detect_daily_signals(trade_date: str, params: dict) -> pd.DataFrame:
                 "VWAP": round(row_vwap, 2),
                 "成交量(手)": row.get("vol", 0),
                 "成交额(千元)": row.get("amount", 0),
-            })
+            }
+        return None
+
+    # 最多4个线程并行查询历史数据
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(_check_one_stock, row): i for i, row in enumerate(pre_filtered)}
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                results.append(result)
 
     return pd.DataFrame(results)

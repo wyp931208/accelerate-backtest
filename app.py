@@ -438,7 +438,7 @@ with tab2:
             sig_cum_min = st.number_input("累计涨幅下限(%)", value=20.0, step=5.0, key="sig_cum_min")
             sig_cum_max = st.number_input("累计涨幅上限(%)", value=100.0, step=10.0, key="sig_cum_max")
 
-    # 获取最近交易日
+    # 获取最近交易日（已有缓存，首次加载后不会重复请求）
     latest_td = get_latest_trade_date()
     st.info(f"数据最新可用交易日: **{latest_td}**")
 

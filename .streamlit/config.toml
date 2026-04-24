@@ -1,14 +1,23 @@
-[theme]
-primaryColor = "#FF4B4B"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F0F2F6"
-textColor = "#262730"
-font = "sans serif"
-
 [server]
+# 启用XSendfile加速文件下载
+enableXsrfProtection = false
+# 减少文件监控开销
+fileWatcherType = "none"
+# 最大上传大小
 maxUploadSize = 200
-enableCORS = false
-enableXsrfProtection = true
 
 [browser]
+# 禁用自动收集使用统计
 gatherUsageStats = false
+
+[runner]
+# 快速重新运行
+fastReruns = true
+# 强制无输出自动运行
+enforceablePreRunChecks = false
+
+[client]
+# 显示错误详情方便调试
+showErrorDetails = true
+# 工具栏模式
+toolbarMode = "minimal"
