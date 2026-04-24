@@ -102,12 +102,12 @@ def _plot_kline_with_indicators(df, ts_code, stock_name, theme, freq_label, date
     freq_label: '日K线' 或 '周K线'
     date_format: 日期标签格式
     """
-    fig, axes = plt.subplots(4, 1, figsize=(14, 12),
-                              gridspec_kw={'height_ratios': [4, 1.5, 1.5, 1]},
+    fig, axes = plt.subplots(4, 1, figsize=(14, 14),
+                              gridspec_kw={'height_ratios': [4, 2, 2, 1.5]},
                               sharex=True)
     fig.patch.set_facecolor(theme['bg'])
     fig.suptitle(f'{stock_name} ({ts_code}) {freq_label}与技术指标',
-                 fontsize=14, fontweight='bold', y=0.98)
+                 fontsize=18, fontweight='bold', y=0.98)
 
     ax_kline = axes[0]
     ax_vol = axes[1]
@@ -135,13 +135,13 @@ def _plot_kline_with_indicators(df, ts_code, stock_name, theme, freq_label, date
     for ma_col, theme_key in ma_config:
         if ma_col in df.columns:
             ax_kline.plot(x, df[ma_col], color=theme[theme_key],
-                          linewidth=1, label=ma_col, alpha=0.8)
+                          linewidth=1.5, label=ma_col, alpha=0.8)
 
-    ax_kline.legend(loc='upper left', fontsize=8)
-    ax_kline.set_ylabel('价格', fontsize=9)
+    ax_kline.legend(loc='upper left', fontsize=10)
+    ax_kline.set_ylabel('价格', fontsize=12)
     ax_kline.grid(True, alpha=0.3, color=theme['grid'])
     ax_kline.set_facecolor(theme['bg'])
-    ax_kline.set_title(freq_label, fontsize=10, loc='left',
+    ax_kline.set_title(freq_label, fontsize=13, loc='left',
                         fontweight='bold', color=theme['up'] if freq_label == '日K线' else theme['up'])
 
     # ---- 成交量柱状图 ----
@@ -154,11 +154,11 @@ def _plot_kline_with_indicators(df, ts_code, stock_name, theme, freq_label, date
     if 'VOL_MA10' in df.columns:
         ax_vol.plot(x, df['VOL_MA10'], color=theme['vol_ma10'], linewidth=1, label='VOL_MA10')
 
-    ax_vol.legend(loc='upper left', fontsize=7)
-    ax_vol.set_ylabel('成交量', fontsize=9)
+    ax_vol.legend(loc='upper left', fontsize=9)
+    ax_vol.set_ylabel('成交量', fontsize=12)
     ax_vol.grid(True, alpha=0.3, color=theme['grid'])
     ax_vol.set_facecolor(theme['bg'])
-    ax_vol.set_title('成交量', fontsize=10, loc='left')
+    ax_vol.set_title('成交量', fontsize=13, loc='left')
 
     # ---- MACD图 ----
     if 'MACD_HIST' in df.columns:
@@ -170,11 +170,11 @@ def _plot_kline_with_indicators(df, ts_code, stock_name, theme, freq_label, date
         ax_macd.plot(x, df['MACD_DEA'], color=theme['dea'], linewidth=1, label='DEA')
 
     ax_macd.axhline(y=0, color='gray', linewidth=0.5, linestyle='--')
-    ax_macd.legend(loc='upper left', fontsize=7)
-    ax_macd.set_ylabel('MACD', fontsize=9)
+    ax_macd.legend(loc='upper left', fontsize=9)
+    ax_macd.set_ylabel('MACD', fontsize=12)
     ax_macd.grid(True, alpha=0.3, color=theme['grid'])
     ax_macd.set_facecolor(theme['bg'])
-    ax_macd.set_title('MACD', fontsize=10, loc='left')
+    ax_macd.set_title('MACD', fontsize=13, loc='left')
 
     # ---- PSY图 ----
     if 'PSY' in df.columns:
@@ -185,18 +185,18 @@ def _plot_kline_with_indicators(df, ts_code, stock_name, theme, freq_label, date
                         linestyle='--', alpha=0.7, label='超卖(25)')
         ax_psy.fill_between(x, 25, 75, alpha=0.05, color='gray')
 
-    ax_psy.legend(loc='upper left', fontsize=7)
-    ax_psy.set_ylabel('PSY', fontsize=9)
-    ax_psy.set_xlabel('交易日期', fontsize=9)
+    ax_psy.legend(loc='upper left', fontsize=9)
+    ax_psy.set_ylabel('PSY', fontsize=12)
+    ax_psy.set_xlabel('交易日期', fontsize=12)
     ax_psy.grid(True, alpha=0.3, color=theme['grid'])
     ax_psy.set_facecolor(theme['bg'])
-    ax_psy.set_title('PSY心理线', fontsize=10, loc='left')
+    ax_psy.set_title('PSY心理线', fontsize=13, loc='left')
 
     # 设置x轴日期标签
     tick_positions = np.linspace(0, len(df) - 1, min(8, len(df))).astype(int)
     tick_labels = [dates.iloc[i].strftime(date_format) if i < len(dates) else '' for i in tick_positions]
     ax_psy.set_xticks(tick_positions)
-    ax_psy.set_xticklabels(tick_labels, rotation=30, fontsize=8)
+    ax_psy.set_xticklabels(tick_labels, rotation=30, fontsize=10)
 
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
