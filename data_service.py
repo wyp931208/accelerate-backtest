@@ -205,15 +205,14 @@ def get_suspend_d(trade_date: str = "", ts_code: str = "",
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_st_stock_list(trade_date: str = "") -> pd.DataFrame:
-    """获取ST股票列表"""
+    """获取ST股票列表（trade_date为空时自动使用最新交易日）"""
     pro = get_pro_api()
     if pro is None:
         return pd.DataFrame()
     try:
-        kwargs = {}
-        if trade_date:
-            kwargs['trade_date'] = trade_date
-        df = pro.stock_st(**kwargs)
+        if not trade_date:
+            trade_date = get_latest_trade_date()
+        df = pro.stock_st(trade_date=trade_date)
         return df
     except Exception as e:
         st.error(f"获取ST股票列表失败: {e}")
