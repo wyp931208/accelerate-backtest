@@ -16,12 +16,20 @@ import os
 
 def get_chinese_font():
     """尝试注册中文字体"""
+    # 项目内字体目录（优先）
+    project_font = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts', 'SimHei.ttf')
     font_paths = [
+        project_font,
         'C:/Windows/Fonts/simhei.ttf',
         'C:/Windows/Fonts/msyh.ttc',
         'C:/Windows/Fonts/simsun.ttc',
+        '/System/Library/Fonts/STHeiti Medium.ttc',
+        '/Library/Fonts/Arial Unicode.ttf',
         '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
         '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
+        '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
     ]
     for fp in font_paths:
         if os.path.exists(fp):
@@ -30,6 +38,16 @@ def get_chinese_font():
                 return 'ChineseFont'
             except Exception:
                 continue
+    # 兜底：尝试查找系统中任何可用的中文字体
+    import glob
+    for pattern in ['/usr/share/fonts/**/*CJK*', '/usr/share/fonts/**/*wqy*', '/usr/share/fonts/**/*Noto*SC*']:
+        for fp in glob.glob(pattern, recursive=True):
+            if fp.endswith(('.ttf', '.ttc', '.otf')):
+                try:
+                    pdfmetrics.registerFont(TTFont('ChineseFont', fp))
+                    return 'ChineseFont'
+                except Exception:
+                    continue
     return 'Helvetica'
 
 

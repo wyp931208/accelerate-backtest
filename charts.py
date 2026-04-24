@@ -11,9 +11,45 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.patches import FancyBboxPatch
 from io import BytesIO
+import os
 
-# 设置中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
+# 设置中文字体（兼容Linux/Streamlit Cloud环境）
+def _setup_chinese_font():
+    """自动寻找并配置中文字体"""
+    import matplotlib.font_manager as fm
+    # 常见中文字体路径
+    font_candidates = [
+        # 项目内字体（优先）
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts', 'SimHei.ttf'),
+        # Windows
+        'C:/Windows/Fonts/simhei.ttf',
+        'C:/Windows/Fonts/msyh.ttc',
+        # macOS
+        '/System/Library/Fonts/STHeiti Medium.ttc',
+        '/Library/Fonts/Arial Unicode.ttf',
+        # Linux
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
+        '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+    ]
+    for fp in font_candidates:
+        if os.path.exists(fp):
+            try:
+                fm.fontManager.addfont(fp)
+                prop = fm.FontProperties(fname=fp)
+                plt.rcParams['font.sans-serif'] = [prop.get_name()] + plt.rcParams['font.sans-serif']
+                return
+            except Exception:
+                continue
+    # 最后兜底：查找系统中所有可用中文字体
+    for f in fm.fontManager.ttflist:
+        if any(kw in f.name.lower() for kw in ['cjk', 'chinese', 'simhei', 'yahei', 'wqy', 'noto sans sc', 'heiti', 'songti']):
+            plt.rcParams['font.sans-serif'] = [f.name] + plt.rcParams['font.sans-serif']
+            return
+
+_setup_chinese_font()
 plt.rcParams['axes.unicode_minus'] = False
 
 
