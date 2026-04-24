@@ -107,6 +107,14 @@ with tab1:
                 value=datetime.now(),
                 key="bt_end"
             )
+            adj_type = st.selectbox(
+                "复权方式",
+                options=["qfq", "hfq", "none"],
+                format_func=lambda x: {"qfq": "前复权", "hfq": "后复权", "none": "不复权"}[x],
+                index=0,
+                key="bt_adj_type",
+                help="前复权：以最新价格为基准向前调整（推荐）；后复权：以上市首日为基准向后调整；不复权：原始价格"
+            )
             buy_amount = st.number_input(
                 "单次买入金额(元)", min_value=10000, max_value=1000000,
                 value=100000, step=10000, key="bt_buy_amount"
@@ -188,13 +196,14 @@ with tab1:
             "cum_pct_chg_min": cum_pct_min,
             "cum_pct_chg_max": cum_pct_max,
             "end_date": end_date.strftime('%Y%m%d'),
+            "adj_type": adj_type,
         }
 
         sd = start_date.strftime('%Y%m%d')
         ed = end_date.strftime('%Y%m%d')
 
         with st.spinner("正在获取数据并执行回测，请耐心等待..."):
-            daily = get_daily_data_with_info(sd, ed)
+            daily = get_daily_data_with_info(sd, ed, adj_type=adj_type)
             if daily.empty:
                 st.error("获取数据失败，请检查Token和网络连接")
             else:

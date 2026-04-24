@@ -38,14 +38,17 @@ def precompute_signals(daily: pd.DataFrame, params: dict) -> pd.DataFrame:
     """
     df = daily.copy()
 
-    # 涨停判断
+    # 涨停判断（使用原始价格，因为涨跌幅限制基于除权价格）
     cond_cyb = df["ts_code"].str.startswith("300")
+    # 如果存在不复权价格列，优先使用（复权数据时使用原始价格判断涨停更准确）
+    pre_close_col = "pre_close_bfq" if "pre_close_bfq" in df.columns else "pre_close"
+    close_col = "close_bfq" if "close_bfq" in df.columns else "close"
     df["limit_up_price"] = np.round(
-        df["pre_close"] * np.where(cond_cyb, 1.20, 1.10), 2
+        df[pre_close_col] * np.where(cond_cyb, 1.20, 1.10), 2
     )
     df["is_limit"] = (
         (df["pct_chg"] >= np.where(cond_cyb, 19.8, 9.8)) &
-        (df["close"] >= df["limit_up_price"] * 0.995)
+        (df[close_col] >= df["limit_up_price"] * 0.995)
     )
 
     # 量比（如果API已有volume_ratio则直接用，否则用前日成交量计算）

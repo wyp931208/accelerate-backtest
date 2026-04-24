@@ -219,10 +219,15 @@ def get_st_stock_list(trade_date: str = "") -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_daily_data_with_info(start_date: str, end_date: str, progress_placeholder=None) -> pd.DataFrame:
+def get_daily_data_with_info(start_date: str, end_date: str, progress_placeholder=None, adj_type: str = "qfq") -> pd.DataFrame:
     """
     获取回测所需的全部日线数据（含股票名称、上市日期等）
     优化：使用日期范围批量获取，而非逐日查询
+    
+    adj_type: 复权方式
+        - "qfq": 前复权（以最新价格为基准向前调整，推荐）
+        - "hfq": 后复权（以上市首日为基准向后调整）
+        - "none": 不复权（使用原始价格）
     
     progress_placeholder: 可选的st.progress占位符，如果为None则自动创建
     """
@@ -411,6 +416,43 @@ def get_daily_data_with_info(start_date: str, end_date: str, progress_placeholde
     if 'name' in daily.columns:
         daily['is_st'] = daily['is_st'] | daily['name'].str.upper().str.contains('ST', na=False)
 
+    # 9. 根据复权方式调整价格
+    progress.progress(99, text=f"正在应用复权方式: {'前复权' if adj_type == 'qfq' else '后复权' if adj_type == 'hfq' else '不复权'}...")
+    if adj_type in ('qfq', 'hfq') and 'adj_factor' in daily.columns and daily['adj_factor'].notna().any():
+        # 保留原始不复权价格（用于某些需要原始价格的逻辑，如涨跌停判断）
+        for col in ['open', 'high', 'low', 'close', 'pre_close']:
+            if col in daily.columns:
+                daily[f'{col}_bfq'] = daily[col]
+
+        if adj_type == 'qfq':
+            # 前复权：每只股票以最新复权因子为基准，向前调整
+            for ts_code, group in daily.groupby('ts_code'):
+                mask = daily['ts_code'] == ts_code
+                adj_factors = daily.loc[mask, 'adj_factor']
+                # 找到该股票最新的复权因子
+                latest_idx = group['trade_date'].idxmax()
+                latest_adj = adj_factors.loc[latest_idx]
+                if pd.isna(latest_adj) or latest_adj == 0:
+                    continue
+                # 前复权价格 = 原始价格 × 当日复权因子 / 最新复权因子
+                for col in ['open', 'high', 'low', 'close', 'pre_close']:
+                    if col in daily.columns:
+                        daily.loc[mask, col] = daily.loc[mask, col] * adj_factors / latest_adj
+        elif adj_type == 'hfq':
+            # 后复权：以上市首日复权因子为基准，向后调整
+            # 后复权价格 = 原始价格 × 当日复权因子 / 上市首日复权因子
+            for ts_code, group in daily.groupby('ts_code'):
+                mask = daily['ts_code'] == ts_code
+                adj_factors = daily.loc[mask, 'adj_factor']
+                # 找到该股票最早的复权因子
+                earliest_idx = group['trade_date'].idxmin()
+                earliest_adj = adj_factors.loc[earliest_idx]
+                if pd.isna(earliest_adj) or earliest_adj == 0:
+                    continue
+                for col in ['open', 'high', 'low', 'close', 'pre_close']:
+                    if col in daily.columns:
+                        daily.loc[mask, col] = daily.loc[mask, col] * adj_factors / earliest_adj
+
     progress.progress(100, text="数据获取完成！")
 
     return daily
@@ -512,13 +554,27 @@ def get_stock_kline_data(ts_code: str, end_date: str, n_days: int = 40) -> pd.Da
 
 
 def get_stock_weekly_kline(ts_code: str, end_date: str, n_weeks: int = 40) -> pd.DataFrame:
-    """获取单只股票近N周的周线数据"""
+    """获取单只股票近N周的周线数据（含前复权）"""
     start_dt = datetime.strptime(end_date, '%Y%m%d') - timedelta(days=n_weeks * 7 + 60)
     start_date = start_dt.strftime('%Y%m%d')
 
     weekly = get_weekly_data(ts_code=ts_code, start_date=start_date, end_date=end_date)
     if weekly.empty:
         return pd.DataFrame()
+
+    # 获取复权因子并计算前复权价格
+    adj = get_adj_factor(ts_code=ts_code)
+    if not adj.empty:
+        # 将日复权因子映射到周线日期
+        weekly = weekly.merge(adj[['ts_code', 'trade_date', 'adj_factor']],
+                              on=['ts_code', 'trade_date'], how='left')
+        # 前填复权因子
+        weekly['adj_factor'] = weekly['adj_factor'].ffill()
+        if weekly['adj_factor'].notna().any() and len(weekly) > 0:
+            latest_adj = weekly['adj_factor'].iloc[-1] if weekly['adj_factor'].iloc[-1] != 0 else 1
+            for col in ['open', 'high', 'low', 'close']:
+                if col in weekly.columns:
+                    weekly[col] = weekly[col] * weekly['adj_factor'] / latest_adj
 
     weekly = weekly.sort_values('trade_date').tail(n_weeks).reset_index(drop=True)
     return weekly
