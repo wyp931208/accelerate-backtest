@@ -222,7 +222,7 @@ def get_st_stock_list(trade_date: str = "") -> pd.DataFrame:
 def get_daily_data_with_info(start_date: str, end_date: str, progress_placeholder=None) -> pd.DataFrame:
     """
     获取回测所需的全部日线数据（含股票名称、上市日期等）
-    分步获取: 日线行情 + 股票基础信息 + 复权因子 + 每日指标 + 涨跌停 + 停复牌 + ST列表
+    优化：使用日期范围批量获取，而非逐日查询
     
     progress_placeholder: 可选的st.progress占位符，如果为None则自动创建
     """
@@ -230,55 +230,122 @@ def get_daily_data_with_info(start_date: str, end_date: str, progress_placeholde
     if pro is None:
         return pd.DataFrame()
 
-    progress = progress_placeholder if progress_placeholder else st.progress(0, text="正在获取日线行情数据...")
+    progress = progress_placeholder if progress_placeholder else st.progress(0, text="正在获取数据...")
 
-    # 1. 获取日线行情（按交易日批量获取）
-    cal = get_trade_calendar(start_date, end_date)
-    if cal.empty:
-        return pd.DataFrame()
-    trade_dates = cal[cal['is_open'] == 1]['cal_date'].sort_values().tolist()
-
-    all_daily = []
-    for i, td in enumerate(trade_dates):
-        progress.progress(int((i + 1) / len(trade_dates) * 30),
-                          text=f"正在获取日线行情 {i+1}/{len(trade_dates)}...")
-        df = get_daily_data(trade_date=td)
-        if not df.empty:
-            all_daily.append(df)
-        time.sleep(0.15)  # 限流
+    # 1. 获取日线行情（按日期范围一次性获取，Tushare每次最多返回5000行）
+    progress.progress(5, text="正在获取日线行情数据（批量模式）...")
+    try:
+        all_daily = []
+        # Tushare daily接口用start_date/end_date可以批量获取
+        # 但单次返回可能有限，需要分批（按月分段）
+        cal = get_trade_calendar(start_date, end_date)
+        if cal.empty:
+            return pd.DataFrame()
+        trade_dates = cal[cal['is_open'] == 1]['cal_date'].sort_values().tolist()
+        
+        # 按月分段获取，避免单次返回数据量过大
+        from datetime import datetime as dt
+        start_dt = dt.strptime(start_date, '%Y%m%d')
+        end_dt = dt.strptime(end_date, '%Y%m%d')
+        
+        # 生成年月分段
+        segments = []
+        cur_start = start_date
+        cur_year, cur_month = start_dt.year, start_dt.month
+        while True:
+            # 每段最多3个月
+            if cur_month + 3 > 12:
+                next_year = cur_year + 1
+                next_month = (cur_month + 3) - 12
+            else:
+                next_year = cur_year
+                next_month = cur_month + 3
+            
+            seg_end_dt = dt(next_year, next_month, 1) - timedelta(days=1)
+            seg_end = min(seg_end_dt.strftime('%Y%m%d'), end_date)
+            segments.append((cur_start, seg_end))
+            
+            if seg_end >= end_date:
+                break
+            cur_start = dt(next_year, next_month, 1).strftime('%Y%m%d')
+            cur_year, cur_month = next_year, next_month
+        
+        for i, (seg_s, seg_e) in enumerate(segments):
+            progress.progress(int(5 + (i + 1) / len(segments) * 30),
+                              text=f"正在获取日线行情 {i+1}/{len(segments)} ({seg_s}~{seg_e})...")
+            df = pro.daily(start_date=seg_s, end_date=seg_e)
+            if not df.empty:
+                all_daily.append(df)
+            time.sleep(0.2)
+    except Exception as e:
+        st.error(f"获取日线数据失败: {e}")
+        # 降级：逐日获取
+        all_daily = []
+        for i, td in enumerate(trade_dates):
+            progress.progress(int((i + 1) / len(trade_dates) * 30),
+                              text=f"正在获取日线行情(降级模式) {i+1}/{len(trade_dates)}...")
+            df = get_daily_data(trade_date=td)
+            if not df.empty:
+                all_daily.append(df)
+            time.sleep(0.15)
 
     if not all_daily:
         return pd.DataFrame()
     daily = pd.concat(all_daily, ignore_index=True)
 
-    # 2. 获取股票基础信息
+    # 2. 获取股票基础信息（一次调用）
     progress.progress(35, text="正在获取股票基础信息...")
     stock_info = get_stock_basic()
 
-    # 3. 获取复权因子
-    progress.progress(45, text="正在获取复权因子...")
-    all_adj = []
-    for i, td in enumerate(trade_dates):
-        adj = get_adj_factor(trade_date=td)
-        if not adj.empty:
-            all_adj.append(adj)
-        time.sleep(0.15)
-    if all_adj:
-        adj_df = pd.concat(all_adj, ignore_index=True)
-        daily = daily.merge(adj_df[['ts_code', 'trade_date', 'adj_factor']],
-                            on=['ts_code', 'trade_date'], how='left')
+    # 3. 获取复权因子（按日期范围批量获取）
+    progress.progress(45, text="正在获取复权因子（批量模式）...")
+    try:
+        adj_dfs = []
+        for i, (seg_s, seg_e) in enumerate(segments):
+            adj = pro.adj_factor(start_date=seg_s, end_date=seg_e)
+            if not adj.empty:
+                adj_dfs.append(adj[['ts_code', 'trade_date', 'adj_factor']])
+            time.sleep(0.2)
+        if adj_dfs:
+            adj_df = pd.concat(adj_dfs, ignore_index=True)
+            daily = daily.merge(adj_df, on=['ts_code', 'trade_date'], how='left')
+    except Exception:
+        # 降级：逐日获取
+        all_adj = []
+        for i, td in enumerate(trade_dates):
+            adj = get_adj_factor(trade_date=td)
+            if not adj.empty:
+                all_adj.append(adj)
+            time.sleep(0.15)
+        if all_adj:
+            adj_df = pd.concat(all_adj, ignore_index=True)
+            daily = daily.merge(adj_df[['ts_code', 'trade_date', 'adj_factor']],
+                                on=['ts_code', 'trade_date'], how='left')
 
-    # 4. 获取每日指标（量比等）
-    progress.progress(60, text="正在获取每日指标...")
-    all_basic = []
-    for i, td in enumerate(trade_dates):
-        db = get_daily_basic(trade_date=td)
-        if not db.empty:
-            all_basic.append(db[['ts_code', 'trade_date', 'volume_ratio', 'turnover_rate']])
-        time.sleep(0.15)
-    if all_basic:
-        basic_df = pd.concat(all_basic, ignore_index=True)
-        daily = daily.merge(basic_df, on=['ts_code', 'trade_date'], how='left')
+    # 4. 获取每日指标（量比等，按日期范围批量获取）
+    progress.progress(60, text="正在获取每日指标（批量模式）...")
+    try:
+        basic_dfs = []
+        for i, (seg_s, seg_e) in enumerate(segments):
+            db = pro.daily_basic(start_date=seg_s, end_date=seg_e,
+                                 fields='ts_code,trade_date,volume_ratio,turnover_rate')
+            if not db.empty:
+                basic_dfs.append(db[['ts_code', 'trade_date', 'volume_ratio', 'turnover_rate']])
+            time.sleep(0.2)
+        if basic_dfs:
+            basic_df = pd.concat(basic_dfs, ignore_index=True)
+            daily = daily.merge(basic_df, on=['ts_code', 'trade_date'], how='left')
+    except Exception:
+        # 降级：逐日获取
+        all_basic = []
+        for i, td in enumerate(trade_dates):
+            db = get_daily_basic(trade_date=td)
+            if not db.empty:
+                all_basic.append(db[['ts_code', 'trade_date', 'volume_ratio', 'turnover_rate']])
+            time.sleep(0.15)
+        if all_basic:
+            basic_df = pd.concat(all_basic, ignore_index=True)
+            daily = daily.merge(basic_df, on=['ts_code', 'trade_date'], how='left')
 
     # 5. 合并股票基础信息
     progress.progress(75, text="正在合并基础信息...")
@@ -286,29 +353,53 @@ def get_daily_data_with_info(start_date: str, end_date: str, progress_placeholde
         daily = daily.merge(stock_info[['ts_code', 'name', 'list_date', 'market']],
                             on='ts_code', how='left')
 
-    # 6. 获取涨跌停价格
-    progress.progress(85, text="正在获取涨跌停价格...")
-    all_limits = []
-    for i, td in enumerate(trade_dates):
-        lim = get_stk_limit(trade_date=td)
-        if not lim.empty:
-            all_limits.append(lim[['ts_code', 'trade_date', 'up_limit', 'down_limit']])
-        time.sleep(0.15)
-    if all_limits:
-        limit_df = pd.concat(all_limits, ignore_index=True)
-        daily = daily.merge(limit_df, on=['ts_code', 'trade_date'], how='left')
+    # 6. 获取涨跌停价格（按日期范围批量获取）
+    progress.progress(85, text="正在获取涨跌停价格（批量模式）...")
+    try:
+        limit_dfs = []
+        for i, (seg_s, seg_e) in enumerate(segments):
+            lim = pro.stk_limit(start_date=seg_s, end_date=seg_e)
+            if not lim.empty:
+                limit_dfs.append(lim[['ts_code', 'trade_date', 'up_limit', 'down_limit']])
+            time.sleep(0.2)
+        if limit_dfs:
+            limit_df = pd.concat(limit_dfs, ignore_index=True)
+            daily = daily.merge(limit_df, on=['ts_code', 'trade_date'], how='left')
+    except Exception:
+        # 降级：逐日获取
+        all_limits = []
+        for i, td in enumerate(trade_dates):
+            lim = get_stk_limit(trade_date=td)
+            if not lim.empty:
+                all_limits.append(lim[['ts_code', 'trade_date', 'up_limit', 'down_limit']])
+            time.sleep(0.15)
+        if all_limits:
+            limit_df = pd.concat(all_limits, ignore_index=True)
+            daily = daily.merge(limit_df, on=['ts_code', 'trade_date'], how='left')
 
-    # 7. 获取停复牌信息
-    progress.progress(92, text="正在获取停复牌信息...")
-    suspend_codes = set()
-    for i, td in enumerate(trade_dates):
-        sus = get_suspend_d(trade_date=td, suspend_type='S')
-        if not sus.empty:
-            suspend_codes.update(sus['ts_code'].tolist())
-        time.sleep(0.15)
+    # 7. 获取停复牌信息（按日期范围批量获取）
+    progress.progress(92, text="正在获取停复牌信息（批量模式）...")
+    try:
+        sus_dfs = []
+        for i, (seg_s, seg_e) in enumerate(segments):
+            sus = pro.suspend_d(start_date=seg_s, end_date=seg_e, suspend_type='S')
+            if not sus.empty:
+                sus_dfs.append(sus)
+            time.sleep(0.2)
+        suspend_codes = set()
+        for sdf in sus_dfs:
+            suspend_codes.update(sdf['ts_code'].tolist())
+    except Exception:
+        # 降级：逐日获取
+        suspend_codes = set()
+        for i, td in enumerate(trade_dates):
+            sus = get_suspend_d(trade_date=td, suspend_type='S')
+            if not sus.empty:
+                suspend_codes.update(sus['ts_code'].tolist())
+            time.sleep(0.15)
     daily['is_suspended'] = daily['ts_code'].isin(suspend_codes)
 
-    # 8. 获取ST列表
+    # 8. 获取ST列表（一次调用）
     progress.progress(97, text="正在获取ST股票列表...")
     st_df = get_st_stock_list()
     st_codes = set()
