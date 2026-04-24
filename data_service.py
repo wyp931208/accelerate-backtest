@@ -11,16 +11,23 @@ import streamlit as st
 import time
 
 
+# 默认Token和API地址（内置，打开网页即可用）
+DEFAULT_TOKEN = "hTASoWevdIQVKNJgEUGoDEWIMufHKYuLTSUGZfUOImwssjguKASNmWMywBkFgpjF"
+TUSHARE_API_URL = "http://124.222.60.121:8020/"
+
+
 @st.cache_resource
 def get_pro_api():
     """获取Tushare Pro API实例（全局缓存）"""
-    token = st.secrets.get("TUSHARE_TOKEN", "")
-    if not token or token == "your_tushare_token_here":
-        token = st.session_state.get("tushare_token", "")
+    # 优先使用用户在页面上输入的token，其次使用secrets配置，最后使用默认token
+    token = st.session_state.get("tushare_token", "")
     if not token:
-        return None
-    ts.set_token(token)
-    return ts.pro_api()
+        token = st.secrets.get("TUSHARE_TOKEN", "")
+    if not token or token == "your_tushare_token_here":
+        token = DEFAULT_TOKEN
+    pro = ts.pro_api(token)
+    pro._DataApi__http_url = TUSHARE_API_URL
+    return pro
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
