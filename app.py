@@ -175,17 +175,22 @@ with tab1:
                 "上影线比例上限", min_value=0.1, max_value=1.0,
                 value=0.50, step=0.05, format="%.2f", key="bt_us_max"
             )
+            require_cum_pct = st.checkbox("要求前N日累计涨幅", value=True, key="bt_req_cum_pct",
+                                          help="启用后将筛选前N日累计涨幅在指定范围内的股票；关闭则不限制累计涨幅")
             n_days_lookback = st.number_input(
                 "前N日累计涨幅(N)", min_value=3, max_value=60,
-                value=20, key="bt_n_days"
+                value=20, key="bt_n_days",
+                disabled=not require_cum_pct
             )
             cum_pct_min = st.number_input(
                 "累计涨幅下限(%)", min_value=0.0, max_value=100.0,
-                value=20.0, step=5.0, key="bt_cum_min"
+                value=20.0, step=5.0, key="bt_cum_min",
+                disabled=not require_cum_pct
             )
             cum_pct_max = st.number_input(
                 "累计涨幅上限(%)", min_value=20.0, max_value=500.0,
-                value=100.0, step=10.0, key="bt_cum_max"
+                value=100.0, step=10.0, key="bt_cum_max",
+                disabled=not require_cum_pct
             )
 
             require_vwap = st.checkbox("要求收盘高于VWAP", value=True, key="bt_req_vwap")
@@ -221,6 +226,7 @@ with tab1:
             "n_days_lookback": n_days_lookback,
             "cum_pct_chg_min": cum_pct_min,
             "cum_pct_chg_max": cum_pct_max,
+            "require_cum_pct": require_cum_pct,
             "adj_type": adj_type,
         }
 
@@ -480,11 +486,16 @@ with tab2:
             st.markdown("**上影线与累计涨幅**")
             sig_us_min = st.number_input("上影线下限", value=0.25, step=0.05, format="%.2f", key="sig_us_min")
             sig_us_max = st.number_input("上影线上限", value=0.50, step=0.05, format="%.2f", key="sig_us_max")
-            sig_cum_min = st.number_input("累计涨幅下限(%)", value=20.0, step=5.0, key="sig_cum_min")
-            sig_cum_max = st.number_input("累计涨幅上限(%)", value=100.0, step=10.0, key="sig_cum_max")
+            sig_req_cum_pct = st.checkbox("要求前N日累计涨幅", value=True, key="sig_req_cum_pct",
+                                          help="启用后将筛选前N日累计涨幅在指定范围内的股票")
+            sig_cum_min = st.number_input("累计涨幅下限(%)", value=20.0, step=5.0, key="sig_cum_min",
+                                         disabled=not sig_req_cum_pct)
+            sig_cum_max = st.number_input("累计涨幅上限(%)", value=100.0, step=10.0, key="sig_cum_max",
+                                         disabled=not sig_req_cum_pct)
         with col_s3:
             st.markdown("**累计涨幅天数与VWAP**")
-            sig_n_days = st.number_input("前N日累计涨幅(N)", min_value=3, max_value=60, value=20, step=1, key="sig_n_days")
+            sig_n_days = st.number_input("前N日累计涨幅(N)", min_value=3, max_value=60, value=20, step=1, key="sig_n_days",
+                                         disabled=not sig_req_cum_pct)
             sig_req_vwap = st.checkbox("要求收盘高于VWAP", value=True, key="sig_req_vwap")
             sig_vwap_pct = st.number_input(
                 "收盘高于VWAP百分比(%)", min_value=0.0, max_value=2.0,
@@ -521,6 +532,7 @@ with tab2:
             "cum_pct_chg_min": sig_cum_min,
             "cum_pct_chg_max": sig_cum_max,
             "n_days_lookback": sig_n_days,
+            "require_cum_pct": sig_req_cum_pct,
             "require_close_above_vwap": sig_req_vwap,
             "close_above_vwap_pct": sig_vwap_pct,
         }

@@ -128,22 +128,34 @@ def identify_signals(daily: pd.DataFrame, params: dict) -> pd.DataFrame:
     upper_shadow_ratio_max = params.get("upper_shadow_ratio_max", 0.5)
     cum_pct_chg_min = params.get("cum_pct_chg_min", 20.0)
     cum_pct_chg_max = params.get("cum_pct_chg_max", 100.0)
+    require_cum_pct = params.get("require_cum_pct", True)
 
-    signals = daily[
-        (daily["ts_code"].str.startswith("300")) &
-        (~daily["is_st"]) &
-        (~daily["is_new"]) &
-        (~daily["is_suspended"]) &
-        (daily["pct_chg"] >= pct_chg_min) &
-        (daily["pct_chg"] <= pct_chg_max) &
-        (daily["volume_ratio"] >= volume_ratio_min) &
-        (daily["volume_ratio"] <= volume_ratio_max) &
-        (daily["upper_shadow_ratio"] >= upper_shadow_ratio_min) &
-        (daily["upper_shadow_ratio"] <= upper_shadow_ratio_max) &
-        (daily["close_above_vwap"]) &
-        (daily["cum_pct_chg_N"] > cum_pct_chg_min) &
-        (daily["cum_pct_chg_N"] <= cum_pct_chg_max)
-    ].copy()
+    # 构建过滤条件列表
+    conditions = [
+        daily["ts_code"].str.startswith("300"),
+        ~daily["is_st"],
+        ~daily["is_new"],
+        ~daily["is_suspended"],
+        daily["pct_chg"] >= pct_chg_min,
+        daily["pct_chg"] <= pct_chg_max,
+        daily["volume_ratio"] >= volume_ratio_min,
+        daily["volume_ratio"] <= volume_ratio_max,
+        daily["upper_shadow_ratio"] >= upper_shadow_ratio_min,
+        daily["upper_shadow_ratio"] <= upper_shadow_ratio_max,
+        daily["close_above_vwap"],
+    ]
+
+    # 累计涨幅条件：仅在启用时过滤
+    if require_cum_pct:
+        conditions.append(daily["cum_pct_chg_N"] > cum_pct_chg_min)
+        conditions.append(daily["cum_pct_chg_N"] <= cum_pct_chg_max)
+
+    # 合并所有条件
+    mask = conditions[0]
+    for cond in conditions[1:]:
+        mask = mask & cond
+
+    signals = daily[mask].copy()
 
     return signals
 
@@ -488,6 +500,7 @@ def detect_daily_signals(trade_date: str, params: dict) -> pd.DataFrame:
     n_days_lookback = params.get("n_days_lookback", 20)
     cum_pct_min = params.get("cum_pct_chg_min", 20.0)
     cum_pct_max = params.get("cum_pct_chg_max", 100.0)
+    require_cum_pct = params.get("require_cum_pct", True)
     require_close_above_vwap = params.get("require_close_above_vwap", True)
     close_above_vwap_pct = params.get("close_above_vwap_pct", 0.3)
 
@@ -521,6 +534,28 @@ def detect_daily_signals(trade_date: str, params: dict) -> pd.DataFrame:
     from data_service import get_daily_data
     results = []
     n_days_lookback = params.get("n_days_lookback", 20)
+
+    # 如果不需要累计涨幅筛选，初筛通过的股票直接作为信号
+    if not require_cum_pct:
+        for row in pre_filtered:
+            is_new = is_new_stock(row.get("list_date"), pd.to_datetime(trade_date))
+            if is_new:
+                continue
+            results.append({
+                "ts_code": row["ts_code"],
+                "股票名称": row.get("name", ""),
+                "板块": "创业板",
+                "信号日": trade_date,
+                "涨跌幅(%)": row["pct_chg"],
+                "量比": round(row.get("volume_ratio", 0), 2),
+                "上影线比例": round(row["upper_shadow_ratio"], 4),
+                "前N日累计涨幅(%)": "未启用",
+                "收盘价": row["close"],
+                "VWAP": round(row["vwap"], 2),
+                "成交量(手)": row.get("vol", 0),
+                "成交额(千元)": row.get("amount", 0),
+            })
+        return pd.DataFrame(results)
 
     def _check_one_stock(row):
         """检查单只股票的累计涨幅条件"""
