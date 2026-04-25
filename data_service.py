@@ -463,7 +463,7 @@ def get_signal_date_daily(trade_date: str) -> pd.DataFrame:
     if daily.empty:
         return pd.DataFrame()
 
-    # 获取前一交易日数据（计算量比需要前日成交量）
+    # 获取前一交易日数据（计算量比需要前日成交额）
     cal = get_trade_calendar(
         start_date=(datetime.strptime(trade_date, '%Y%m%d') - timedelta(days=10)).strftime('%Y%m%d'),
         end_date=trade_date
@@ -477,16 +477,16 @@ def get_signal_date_daily(trade_date: str) -> pd.DataFrame:
     if prev_date:
         prev_daily = get_daily_data(trade_date=prev_date)
         if not prev_daily.empty:
-            prev_vol = prev_daily[['ts_code', 'vol']].rename(columns={'vol': 'prev_vol'})
-            daily = daily.merge(prev_vol, on='ts_code', how='left')
+            prev_amt = prev_daily[['ts_code', 'amount']].rename(columns={'amount': 'prev_amount'})
+            daily = daily.merge(prev_amt, on='ts_code', how='left')
             daily['volume_ratio'] = np.where(
-                daily['prev_vol'] > 0,
-                daily['vol'] / daily['prev_vol'],
+                daily['prev_amount'] > 0,
+                daily['amount'] / daily['prev_amount'],
                 0.0
             )
     else:
         daily['volume_ratio'] = 0.0
-        daily['prev_vol'] = 0.0
+        daily['prev_amount'] = 0.0
 
     # 获取股票基础信息
     stock_info = get_stock_basic()

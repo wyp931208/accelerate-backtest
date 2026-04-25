@@ -43,31 +43,24 @@ def precompute_signals(daily: pd.DataFrame, params: dict) -> pd.DataFrame:
     df["trade_date"] = pd.to_datetime(df["trade_date"])
     df = df.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
 
-    # 涨停判断（使用原始价格，因为涨跌幅限制基于除权价格）
+    # 涨停判断（直接用涨跌幅判断，避免涨停价计算的精度问题）
+    # 创业板：pct_chg >= 19.8 视为涨停（含19.98%等非精确20%的情况）
+    # 主板：pct_chg >= 9.8 视为涨停
     cond_cyb = df["ts_code"].str.startswith("300")
-    # 如果存在不复权价格列，优先使用（复权数据时使用原始价格判断涨停更准确）
-    pre_close_col = "pre_close_bfq" if "pre_close_bfq" in df.columns else "pre_close"
-    close_col = "close_bfq" if "close_bfq" in df.columns else "close"
-    df["limit_up_price"] = np.round(
-        df[pre_close_col] * np.where(cond_cyb, 1.20, 1.10), 2
-    )
-    df["is_limit"] = (
-        (df["pct_chg"] >= np.where(cond_cyb, 19.8, 9.8)) &
-        (df[close_col] >= df["limit_up_price"] * 0.995)
-    )
+    df["is_limit"] = df["pct_chg"] >= np.where(cond_cyb, 19.8, 9.8)
 
-    # 量比（如果API已有volume_ratio且非全NaN则直接用，否则用前日成交量计算）
+    # 量比（优先使用Tushare daily_basic的volume_ratio，NaN时用成交额回退计算）
     if 'volume_ratio' not in df.columns or df['volume_ratio'].isna().all():
-        df["prev_vol"] = df.groupby("ts_code")["vol"].shift(1)
+        df["prev_amount"] = df.groupby("ts_code")["amount"].shift(1)
         df["volume_ratio"] = np.where(
-            df["prev_vol"] > 0, df["vol"] / df["prev_vol"], 0.0
+            df["prev_amount"] > 0, df["amount"] / df["prev_amount"], 0.0
         )
     else:
-        # API有量比数据，但对NaN值用前日成交量比补全
+        # API有量比数据，但NaN值用成交额比补全
         if df['volume_ratio'].isna().any():
-            df["prev_vol"] = df.groupby("ts_code")["vol"].shift(1)
+            df["prev_amount"] = df.groupby("ts_code")["amount"].shift(1)
             calc_vr = np.where(
-                df["prev_vol"] > 0, df["vol"] / df["prev_vol"], 0.0
+                df["prev_amount"] > 0, df["amount"] / df["prev_amount"], 0.0
             )
             df["volume_ratio"] = df["volume_ratio"].fillna(pd.Series(calc_vr, index=df.index))
         df["volume_ratio"] = df["volume_ratio"].fillna(0.0)
@@ -84,10 +77,14 @@ def precompute_signals(daily: pd.DataFrame, params: dict) -> pd.DataFrame:
         df["vol"] > 0, df["amount"] / df["vol"], df["close"]
     )
 
-    # 前N日累计涨幅
+    # 前N日累计涨幅（收盘价比较法：当日收盘价 / N个交易日前收盘价 - 1）
+    # 比rolling求和更直观准确，不受每日涨跌幅四舍五入误差累积影响
     n_days_lookback = params.get("n_days_lookback", 20)
-    df["cum_pct_chg_N"] = df.groupby("ts_code")["pct_chg"].transform(
-        lambda x: x.rolling(window=n_days_lookback, min_periods=n_days_lookback).sum()
+    df["close_N_days_ago"] = df.groupby("ts_code")["close"].shift(n_days_lookback)
+    df["cum_pct_chg_N"] = np.where(
+        df["close_N_days_ago"].notna() & (df["close_N_days_ago"] > 0),
+        (df["close"] / df["close_N_days_ago"] - 1) * 100,
+        np.nan
     )
 
     # 收盘高于VWAP
@@ -523,15 +520,19 @@ def detect_daily_signals(trade_date: str, params: dict) -> pd.DataFrame:
         hist = get_daily_data(ts_code=ts_code, end_date=trade_date)
         if hist.empty or len(hist) < n_days_lookback:
             return None
-        hist = hist.sort_values('trade_date')
-        hist['cum_pct'] = hist['pct_chg'].rolling(
-            window=n_days_lookback, min_periods=n_days_lookback).sum()
-        today_data = hist[hist['trade_date'] == trade_date]
-        if today_data.empty:
+        hist = hist.sort_values('trade_date').reset_index(drop=True)
+        # 收盘价比较法：当日收盘价 / N个交易日前收盘价 - 1
+        today_idx = hist[hist['trade_date'] == trade_date].index
+        if today_idx.empty:
             return None
-        cum_pct = today_data['cum_pct'].values[0]
-        if pd.isna(cum_pct):
+        today_i = today_idx[0]
+        if today_i < n_days_lookback - 1:
             return None
+        close_today = hist.loc[today_i, 'close']
+        close_N_ago = hist.loc[today_i - n_days_lookback + 1, 'close']
+        if pd.isna(close_N_ago) or close_N_ago <= 0:
+            return None
+        cum_pct = (close_today / close_N_ago - 1) * 100
 
         if cum_pct > cum_pct_min and cum_pct <= cum_pct_max:
             is_new = is_new_stock(row.get("list_date"), pd.to_datetime(trade_date))
