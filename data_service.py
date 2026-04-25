@@ -7,14 +7,15 @@ import tushare as ts
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from pathlib import Path
 import streamlit as st
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # 默认Token和API地址（内置，打开网页即可用）
 DEFAULT_TOKEN = "hTASoWevdIQVKNJgEUGoDEWIMufHKYuLTSUGZfUOImwssjguKASNmWMywBkFgpjF"
 TUSHARE_API_URL = "http://124.222.60.121:8020/"
+BACKTEST_CACHE_DIR = Path(__file__).resolve().parent / ".cache" / "backtest_daily_v1"
 
 
 @st.cache_resource
@@ -220,222 +221,214 @@ def get_st_stock_list(trade_date: str = "") -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_daily_data_with_info(start_date: str, end_date: str, progress_placeholder=None, adj_type: str = "qfq") -> pd.DataFrame:
-    """
-    获取回测所需的全部日线数据（含股票名称、上市日期等）
-    核心策略：按交易日逐天获取，避免Tushare 5000行限制导致数据截断
-    
-    adj_type: 复权方式
-        - "qfq": 前复权（以最新价格为基准向前调整，推荐）
-        - "hfq": 后复权（以上市首日为基准向后调整）
-        - "none": 不复权（使用原始价格）
-    
-    progress_placeholder: 可选的st.progress占位符，如果为None则自动创建
-    """
+def _ensure_backtest_cache_dir() -> Path:
+    BACKTEST_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return BACKTEST_CACHE_DIR
+
+
+def _get_backtest_cache_file(trade_date: str) -> Path:
+    return _ensure_backtest_cache_dir() / f"{trade_date}.pkl"
+
+
+def _load_backtest_day_cache(trade_date: str, require_adj_factor: bool):
+    cache_file = _get_backtest_cache_file(trade_date)
+    if not cache_file.exists():
+        return None
+    try:
+        df = pd.read_pickle(cache_file)
+    except Exception:
+        try:
+            cache_file.unlink()
+        except OSError:
+            pass
+        return None
+
+    required_columns = {"ts_code", "trade_date", "is_st", "is_suspended"}
+    if require_adj_factor:
+        required_columns.add("adj_factor")
+    if not required_columns.issubset(df.columns):
+        return None
+    return df
+
+
+def _save_backtest_day_cache(trade_date: str, df: pd.DataFrame) -> None:
+    cache_file = _get_backtest_cache_file(trade_date)
+    df.to_pickle(cache_file)
+
+
+def _fetch_trade_date_bundle(trade_date: str, need_adj_factor: bool) -> pd.DataFrame:
     pro = get_pro_api()
     if pro is None:
         return pd.DataFrame()
 
-    progress = progress_placeholder if progress_placeholder else st.progress(0, text="正在获取数据...")
+    try:
+        daily = pro.daily(trade_date=trade_date)
+    except Exception:
+        return pd.DataFrame()
 
-    # 获取交易日历
+    if daily is None or daily.empty:
+        return pd.DataFrame()
+
+    try:
+        basic = pro.daily_basic(
+            trade_date=trade_date,
+            fields='ts_code,trade_date,volume_ratio,turnover_rate'
+        )
+        if basic is not None and not basic.empty:
+            daily = daily.merge(
+                basic[['ts_code', 'trade_date', 'volume_ratio', 'turnover_rate']],
+                on=['ts_code', 'trade_date'],
+                how='left'
+            )
+    except Exception:
+        pass
+
+    if need_adj_factor:
+        try:
+            adj = pro.adj_factor(trade_date=trade_date)
+            if adj is not None and not adj.empty:
+                daily = daily.merge(
+                    adj[['ts_code', 'trade_date', 'adj_factor']],
+                    on=['ts_code', 'trade_date'],
+                    how='left'
+                )
+        except Exception:
+            pass
+
+    try:
+        st_df = pro.stock_st(trade_date=trade_date)
+        st_codes = set(st_df['ts_code'].tolist()) if st_df is not None and not st_df.empty else set()
+    except Exception:
+        st_codes = set()
+
+    try:
+        sus = pro.suspend_d(trade_date=trade_date, suspend_type='S')
+        suspend_codes = set(sus['ts_code'].tolist()) if sus is not None and not sus.empty else set()
+    except Exception:
+        suspend_codes = set()
+
+    if 'volume_ratio' not in daily.columns:
+        daily['volume_ratio'] = np.nan
+    if 'turnover_rate' not in daily.columns:
+        daily['turnover_rate'] = np.nan
+    if need_adj_factor and 'adj_factor' not in daily.columns:
+        daily['adj_factor'] = np.nan
+
+    daily['is_st'] = daily['ts_code'].isin(st_codes)
+    daily['is_suspended'] = daily['ts_code'].isin(suspend_codes)
+
+    return daily
+
+
+def get_daily_data_with_info(start_date: str, end_date: str, progress_placeholder=None, adj_type: str = "qfq") -> pd.DataFrame:
+    """
+    Get all daily backtest data with metadata.
+    Fetches by trade date to avoid per-request row limits, and caches each trade date locally.
+    """
+    progress = progress_placeholder if progress_placeholder else st.progress(0, text="Preparing data...")
+
     cal = get_trade_calendar(start_date, end_date)
     if cal.empty:
         return pd.DataFrame()
     trade_dates = cal[cal['is_open'] == 1]['cal_date'].sort_values().tolist()
-    n_dates = len(trade_dates)
-
-    # ========== 第1步：按交易日获取日线行情 ==========
-    # Tushare按日期范围查询每次最多返回5000行，全市场一天约5000只股票
-    # 所以按天获取是唯一可靠方案，避免数据截断
-    progress.progress(5, text=f"正在按交易日获取日线行情（共{n_dates}个交易日）...")
-
-    def _fetch_one_day(td):
-        """获取单日全市场日线数据"""
-        try:
-            df = pro.daily(trade_date=td)
-            time.sleep(0.08)
-            return df if df is not None and not df.empty else None
-        except Exception:
-            return None
-
-    all_daily = []
-    # 使用线程池并行获取（4线程），每天一次API调用
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = {executor.submit(_fetch_one_day, td): i for i, td in enumerate(trade_dates)}
-        for i, future in enumerate(as_completed(futures)):
-            pct = int(5 + (i + 1) / n_dates * 35)
-            progress.progress(pct, text=f"正在获取日线行情 {i+1}/{n_dates}...")
-            result = future.result()
-            if result is not None:
-                all_daily.append(result)
-
-    if not all_daily:
+    if not trade_dates:
         return pd.DataFrame()
-    daily = pd.concat(all_daily, ignore_index=True)
-    # 去重（防止日期边界重复获取）
-    daily = daily.drop_duplicates(subset=['ts_code', 'trade_date'], keep='first')
 
-    total_rows = len(daily)
-    progress.progress(40, text=f"日线行情获取完成，共{total_rows}条记录")
-
-    # ========== 第2步：获取股票基础信息 ==========
-    progress.progress(42, text="正在获取股票基础信息...")
+    need_adj_factor = adj_type in ('qfq', 'hfq')
     stock_info = get_stock_basic()
 
-    # ========== 第3-5步：按交易日并行获取复权因子/每日指标/涨跌停 ==========
-    progress.progress(45, text=f"正在按交易日获取辅助数据（复权/量比/涨跌停）...")
+    cached_frames = []
+    missing_dates = []
+    for td in trade_dates:
+        cached_df = _load_backtest_day_cache(td, need_adj_factor)
+        if cached_df is None:
+            missing_dates.append(td)
+        else:
+            cached_frames.append(cached_df)
 
-    def _fetch_adj_one_day(td):
-        try:
-            adj = pro.adj_factor(trade_date=td)
-            time.sleep(0.08)
-            return ('adj', adj[['ts_code', 'trade_date', 'adj_factor']]) if adj is not None and not adj.empty else None
-        except Exception:
-            return None
+    n_dates = len(trade_dates)
+    cached_count = len(cached_frames)
+    progress.progress(
+        5,
+        text=f"Preparing backtest data: {n_dates} trade dates, {cached_count} loaded from local cache..."
+    )
 
-    def _fetch_basic_one_day(td):
-        try:
-            db = pro.daily_basic(trade_date=td,
-                                 fields='ts_code,trade_date,volume_ratio,turnover_rate')
-            time.sleep(0.08)
-            return ('basic', db[['ts_code', 'trade_date', 'volume_ratio', 'turnover_rate']]) if db is not None and not db.empty else None
-        except Exception:
-            return None
-
-    def _fetch_limit_one_day(td):
-        try:
-            lim = pro.stk_limit(trade_date=td)
-            time.sleep(0.08)
-            return ('limit', lim[['ts_code', 'trade_date', 'up_limit', 'down_limit']]) if lim is not None and not lim.empty else None
-        except Exception:
-            return None
-
-    def _fetch_st_one_day(td):
-        try:
-            st_df = pro.stock_st(trade_date=td)
-            time.sleep(0.08)
-            return ('st', st_df[['ts_code', 'trade_date']]) if st_df is not None and not st_df.empty else None
-        except Exception:
-            return None
-
-    adj_result = []
-    basic_result = []
-    limit_result = []
-    st_result = []
-
-    # 每天并行获取3类数据，天与天之间串行
-    for i, td in enumerate(trade_dates):
-        pct = int(45 + (i + 1) / n_dates * 40)
-        progress.progress(pct, text=f"正在获取辅助数据 {i+1}/{n_dates}（{td}）...")
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = [
-                executor.submit(_fetch_adj_one_day, td),
-                executor.submit(_fetch_basic_one_day, td),
-                executor.submit(_fetch_limit_one_day, td),
-                executor.submit(_fetch_st_one_day, td),
-            ]
-            for future in as_completed(futures):
+    fetched_frames = []
+    if missing_dates:
+        max_workers = min(8, max(2, len(missing_dates)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_fetch_trade_date_bundle, td, need_adj_factor): td
+                for td in missing_dates
+            }
+            total_missing = len(missing_dates)
+            for idx, future in enumerate(as_completed(futures), start=1):
+                td = futures[future]
                 result = future.result()
-                if result is not None:
-                    data_type, df = result
-                    if data_type == 'adj':
-                        adj_result.append(df)
-                    elif data_type == 'basic':
-                        basic_result.append(df)
-                    elif data_type == 'limit':
-                        limit_result.append(df)
-                    elif data_type == 'st':
-                        st_result.append(df)
+                if result is not None and not result.empty:
+                    _save_backtest_day_cache(td, result)
+                    fetched_frames.append(result)
+                pct = 5 + int(idx / total_missing * 80)
+                progress.progress(
+                    pct,
+                    text=f"Fetching uncached trade dates: {idx}/{total_missing}..."
+                )
+    else:
+        progress.progress(85, text="All requested trade dates were loaded from local cache...")
 
-    # ========== 第6步：合并所有数据 ==========
-    progress.progress(87, text="正在合并数据...")
+    all_frames = cached_frames + fetched_frames
+    if not all_frames:
+        return pd.DataFrame()
 
-    # 合并复权因子
-    if adj_result:
-        adj_df = pd.concat(adj_result, ignore_index=True).drop_duplicates(subset=['ts_code', 'trade_date'], keep='first')
-        daily = daily.merge(adj_df, on=['ts_code', 'trade_date'], how='left')
+    progress.progress(88, text="Merging data...")
+    daily = pd.concat(all_frames, ignore_index=True)
+    daily = daily.drop_duplicates(subset=['ts_code', 'trade_date'], keep='first')
+    daily = daily.sort_values(['ts_code', 'trade_date']).reset_index(drop=True)
 
-    # 合并每日指标
-    if basic_result:
-        basic_df = pd.concat(basic_result, ignore_index=True).drop_duplicates(subset=['ts_code', 'trade_date'], keep='first')
-        daily = daily.merge(basic_df, on=['ts_code', 'trade_date'], how='left')
-
-    # 合并股票基础信息
     if not stock_info.empty:
-        daily = daily.merge(stock_info[['ts_code', 'name', 'list_date', 'market']],
-                            on='ts_code', how='left')
+        daily = daily.merge(
+            stock_info[['ts_code', 'name', 'list_date', 'market']],
+            on='ts_code',
+            how='left'
+        )
 
-    # 合并涨跌停价格
-    if limit_result:
-        limit_df = pd.concat(limit_result, ignore_index=True).drop_duplicates(subset=['ts_code', 'trade_date'], keep='first')
-        daily = daily.merge(limit_df, on=['ts_code', 'trade_date'], how='left')
-
-    # ========== 第7步：获取停复牌信息 ==========
-    progress.progress(92, text="正在获取停复牌信息...")
-    suspend_pairs = set()
-    # 按天获取停牌信息（数量少，也避免截断）
-    for i, td in enumerate(trade_dates):
-        try:
-            sus = pro.suspend_d(trade_date=td, suspend_type='S')
-            time.sleep(0.08)
-            if sus is not None and not sus.empty:
-                suspend_pairs.update(zip(sus['ts_code'], sus['trade_date']))
-        except Exception:
-            pass
-        if (i + 1) % 10 == 0:
-            progress.progress(int(92 + (i + 1) / n_dates * 3), text=f"正在获取停复牌信息 {i+1}/{n_dates}...")
-
-    if suspend_pairs:
-        suspend_df = pd.DataFrame(list(suspend_pairs), columns=['ts_code', 'trade_date'])
-        suspend_df['is_suspended'] = True
-        daily = daily.merge(suspend_df, on=['ts_code', 'trade_date'], how='left')
-        daily['is_suspended'] = daily['is_suspended'].fillna(False)
-    else:
-        daily['is_suspended'] = False
-
-    # ========== 第8步：获取ST列表 ==========
-    progress.progress(96, text="正在获取ST股票列表...")
-    if st_result:
-        st_df = pd.concat(st_result, ignore_index=True).drop_duplicates(subset=['ts_code', 'trade_date'], keep='first')
-        st_df['is_st'] = True
-        daily = daily.merge(st_df[['ts_code', 'trade_date', 'is_st']], on=['ts_code', 'trade_date'], how='left')
-        daily['is_st'] = daily['is_st'].fillna(False)
-    else:
+    if 'is_st' not in daily.columns:
         daily['is_st'] = False
+    else:
+        daily['is_st'] = daily['is_st'].fillna(False)
+    if 'is_suspended' not in daily.columns:
+        daily['is_suspended'] = False
+    else:
+        daily['is_suspended'] = daily['is_suspended'].fillna(False)
 
-    # 补充：名称中含ST也标记
     if 'name' in daily.columns:
         daily['is_st'] = daily['is_st'] | daily['name'].str.upper().str.contains('ST', na=False)
 
-    # ========== 第9步：根据复权方式调整价格 ==========
-    progress.progress(98, text=f"正在应用复权方式: {'前复权' if adj_type == 'qfq' else '后复权' if adj_type == 'hfq' else '不复权'}...")
+    progress.progress(96, text=f"Applying adjustment mode: {adj_type}...")
     if adj_type in ('qfq', 'hfq') and 'adj_factor' in daily.columns and daily['adj_factor'].notna().any():
-        # 保留原始不复权价格（用于某些需要原始价格的逻辑，如涨跌停判断）
         for col in ['open', 'high', 'low', 'close', 'pre_close']:
             if col in daily.columns:
                 daily[f'{col}_bfq'] = daily[col]
 
         if adj_type == 'qfq':
-            # 前复权：每只股票以最新复权因子为基准，向前调整（向量化）
             latest_adj_map = daily.groupby('ts_code')['adj_factor'].transform('last')
             valid_mask = latest_adj_map.notna() & (latest_adj_map != 0)
             for col in ['open', 'high', 'low', 'close', 'pre_close']:
                 if col in daily.columns:
                     daily.loc[valid_mask, col] = daily.loc[valid_mask, col] * daily.loc[valid_mask, 'adj_factor'] / latest_adj_map[valid_mask]
         elif adj_type == 'hfq':
-            # 后复权：以上市首日复权因子为基准，向后调整（向量化）
             earliest_adj_map = daily.groupby('ts_code')['adj_factor'].transform('first')
             valid_mask = earliest_adj_map.notna() & (earliest_adj_map != 0)
             for col in ['open', 'high', 'low', 'close', 'pre_close']:
                 if col in daily.columns:
                     daily.loc[valid_mask, col] = daily.loc[valid_mask, col] * daily.loc[valid_mask, 'adj_factor'] / earliest_adj_map[valid_mask]
 
-    progress.progress(100, text=f"数据获取完成！共{len(daily)}条记录，{daily['ts_code'].nunique()}只股票")
+    progress.progress(
+        100,
+        text=f"Data ready: {len(daily)} rows, {daily['ts_code'].nunique()} stocks, {cached_count} cached dates, {len(missing_dates)} fetched dates."
+    )
 
     return daily
-
-
 def get_signal_date_daily(trade_date: str) -> pd.DataFrame:
     """
     获取某一日信号检测所需的全部数据
