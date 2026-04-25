@@ -311,19 +311,29 @@ def get_daily_data_with_info(start_date: str, end_date: str, progress_placeholde
         except Exception:
             return None
 
+    def _fetch_st_one_day(td):
+        try:
+            st_df = pro.stock_st(trade_date=td)
+            time.sleep(0.08)
+            return ('st', st_df[['ts_code', 'trade_date']]) if st_df is not None and not st_df.empty else None
+        except Exception:
+            return None
+
     adj_result = []
     basic_result = []
     limit_result = []
+    st_result = []
 
     # 每天并行获取3类数据，天与天之间串行
     for i, td in enumerate(trade_dates):
         pct = int(45 + (i + 1) / n_dates * 40)
         progress.progress(pct, text=f"正在获取辅助数据 {i+1}/{n_dates}（{td}）...")
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             futures = [
                 executor.submit(_fetch_adj_one_day, td),
                 executor.submit(_fetch_basic_one_day, td),
                 executor.submit(_fetch_limit_one_day, td),
+                executor.submit(_fetch_st_one_day, td),
             ]
             for future in as_completed(futures):
                 result = future.result()
@@ -335,6 +345,8 @@ def get_daily_data_with_info(start_date: str, end_date: str, progress_placeholde
                         basic_result.append(df)
                     elif data_type == 'limit':
                         limit_result.append(df)
+                    elif data_type == 'st':
+                        st_result.append(df)
 
     # ========== 第6步：合并所有数据 ==========
     progress.progress(87, text="正在合并数据...")
@@ -361,28 +373,36 @@ def get_daily_data_with_info(start_date: str, end_date: str, progress_placeholde
 
     # ========== 第7步：获取停复牌信息 ==========
     progress.progress(92, text="正在获取停复牌信息...")
-    suspend_codes = set()
+    suspend_pairs = set()
     # 按天获取停牌信息（数量少，也避免截断）
     for i, td in enumerate(trade_dates):
         try:
             sus = pro.suspend_d(trade_date=td, suspend_type='S')
             time.sleep(0.08)
             if sus is not None and not sus.empty:
-                suspend_codes.update(sus['ts_code'].tolist())
+                suspend_pairs.update(zip(sus['ts_code'], sus['trade_date']))
         except Exception:
             pass
         if (i + 1) % 10 == 0:
             progress.progress(int(92 + (i + 1) / n_dates * 3), text=f"正在获取停复牌信息 {i+1}/{n_dates}...")
 
-    daily['is_suspended'] = daily['ts_code'].isin(suspend_codes)
+    if suspend_pairs:
+        suspend_df = pd.DataFrame(list(suspend_pairs), columns=['ts_code', 'trade_date'])
+        suspend_df['is_suspended'] = True
+        daily = daily.merge(suspend_df, on=['ts_code', 'trade_date'], how='left')
+        daily['is_suspended'] = daily['is_suspended'].fillna(False)
+    else:
+        daily['is_suspended'] = False
 
     # ========== 第8步：获取ST列表 ==========
     progress.progress(96, text="正在获取ST股票列表...")
-    st_df = get_st_stock_list()
-    st_codes = set()
-    if not st_df.empty:
-        st_codes = set(st_df['ts_code'].tolist())
-    daily['is_st'] = daily['ts_code'].isin(st_codes)
+    if st_result:
+        st_df = pd.concat(st_result, ignore_index=True).drop_duplicates(subset=['ts_code', 'trade_date'], keep='first')
+        st_df['is_st'] = True
+        daily = daily.merge(st_df[['ts_code', 'trade_date', 'is_st']], on=['ts_code', 'trade_date'], how='left')
+        daily['is_st'] = daily['is_st'].fillna(False)
+    else:
+        daily['is_st'] = False
 
     # 补充：名称中含ST也标记
     if 'name' in daily.columns:
@@ -462,7 +482,7 @@ def get_signal_date_daily(trade_date: str) -> pd.DataFrame:
                             on='ts_code', how='left')
 
     # 获取ST列表
-    st_df = get_st_stock_list()
+    st_df = get_st_stock_list(trade_date)
     daily['is_st'] = False
     if not st_df.empty:
         daily['is_st'] = daily['ts_code'].isin(set(st_df['ts_code'].tolist()))
