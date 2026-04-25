@@ -41,6 +41,9 @@ if 'tushare_token' not in st.session_state:
 if 'backtest_results' not in st.session_state:
     st.session_state.backtest_results = None
 
+latest_trade_date_str = get_latest_trade_date()
+latest_trade_date_dt = datetime.strptime(latest_trade_date_str, '%Y%m%d').date()
+
 # ======================
 # 侧边栏 - Token配置
 # ======================
@@ -117,12 +120,14 @@ with tab1:
             st.markdown("**基本信息**")
             start_date = st.date_input(
                 "开始日期",
-                value=datetime(2025, 1, 1),
+                value=min(datetime(2025, 1, 1).date(), latest_trade_date_dt),
+                max_value=latest_trade_date_dt,
                 key="bt_start"
             )
             end_date = st.date_input(
                 "结束日期",
-                value=datetime.now(),
+                value=latest_trade_date_dt,
+                max_value=latest_trade_date_dt,
                 key="bt_end"
             )
             adj_type = st.selectbox(
@@ -183,13 +188,13 @@ with tab1:
                 disabled=not require_cum_pct
             )
             cum_pct_min = st.number_input(
-                "累计涨幅下限(%)", min_value=0.0, max_value=100.0,
-                value=20.0, step=5.0, key="bt_cum_min",
+                "?????????(%)", min_value=-100.0, max_value=100.0,
+                value=0.0, step=5.0, key="bt_cum_min",
                 disabled=not require_cum_pct
             )
             cum_pct_max = st.number_input(
-                "累计涨幅上限(%)", min_value=20.0, max_value=500.0,
-                value=100.0, step=10.0, key="bt_cum_max",
+                "?????????(%)", min_value=-100.0, max_value=100.0,
+                value=20.0, step=5.0, key="bt_cum_max",
                 disabled=not require_cum_pct
             )
 
@@ -488,9 +493,9 @@ with tab2:
             sig_us_max = st.number_input("上影线上限", value=0.50, step=0.05, format="%.2f", key="sig_us_max")
             sig_req_cum_pct = st.checkbox("要求前N日累计涨幅", value=True, key="sig_req_cum_pct",
                                           help="启用后将筛选前N日累计涨幅在指定范围内的股票")
-            sig_cum_min = st.number_input("累计涨幅下限(%)", value=20.0, step=5.0, key="sig_cum_min",
+            sig_cum_min = st.number_input("?????????(%)", min_value=-100.0, max_value=100.0, value=0.0, step=5.0, key="sig_cum_min",
                                          disabled=not sig_req_cum_pct)
-            sig_cum_max = st.number_input("累计涨幅上限(%)", value=100.0, step=10.0, key="sig_cum_max",
+            sig_cum_max = st.number_input("?????????(%)", min_value=-100.0, max_value=100.0, value=20.0, step=5.0, key="sig_cum_max",
                                          disabled=not sig_req_cum_pct)
         with col_s3:
             st.markdown("**累计涨幅天数与VWAP**")
@@ -501,24 +506,24 @@ with tab2:
                 "收盘高于VWAP百分比(%)", min_value=0.0, max_value=2.0,
                 value=0.3, step=0.1, key="sig_vwap_pct",
                 disabled=not sig_req_vwap
+    # ????????????
             )
+    latest_td = latest_trade_date_str
+    st.info(f"?????????: **{latest_td}**")
 
-    # 获取最近交易日（已有缓存，首次加载后不会重复请求）
-    latest_td = get_latest_trade_date()
-    st.info(f"数据最新可用交易日: **{latest_td}**")
-
-    # 手动选择日期或使用最新日期
     col_date1, col_date2 = st.columns([3, 1])
     with col_date1:
-        signal_date = st.text_input(
-            "检测日期(YYYYMMDD)",
-            value=latest_td,
+        signal_date_dt = st.date_input(
+            "????",
+            value=latest_trade_date_dt,
+            max_value=latest_trade_date_dt,
             key="sig_date"
         )
+        signal_date = signal_date_dt.strftime("%Y%m%d")
     with col_date2:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 使用最新日期"):
-            st.session_state.sig_date = latest_td
+        if st.button("?? ??????"):
+            st.session_state.sig_date = latest_trade_date_dt
             st.rerun()
 
     if st.button("🔍 检测信号", type="primary", use_container_width=True):
@@ -614,58 +619,55 @@ with tab3:
         else:
             st.info("请先在「信号提醒」页面检测信号")
 
-    end_date_chart = st.text_input(
-        "结束日期(YYYYMMDD)",
-        value=datetime.now().strftime('%Y%m%d'),
+    end_date_chart_dt = st.date_input(
+        "????",
+        value=latest_trade_date_dt,
+        max_value=latest_trade_date_dt,
         key="chart_end_date"
     )
+    end_date_chart = end_date_chart_dt.strftime("%Y%m%d")
 
-    n_days_chart = st.slider("显示交易日数", min_value=20, max_value=80, value=40,
+    n_days_chart = st.slider("??????", min_value=20, max_value=80, value=40,
                               key="chart_n_days")
 
-    if selected_codes and st.button("📊 生成图表", type="primary"):
+    if selected_codes and st.button("?? ????", type="primary", use_container_width=True):
         chart_results = []
 
         for ts_code in selected_codes:
             st.markdown(f"---\n### {ts_code}")
 
-            with st.spinner(f"正在获取 {ts_code} 的数据并生成图表..."):
-                # 获取股票名称
+            with st.spinner(f"???? {ts_code} ????????..."):
                 stock_info_df = get_stock_basic()
-                name_row = stock_info_df[stock_info_df['ts_code'] == ts_code]
-                stock_name = name_row['name'].values[0] if not name_row.empty else ts_code
+                name_row = stock_info_df[stock_info_df["ts_code"] == ts_code]
+                stock_name = name_row["name"].values[0] if not name_row.empty else ts_code
 
-                # 日K线
                 daily_df = get_stock_kline_data(ts_code, end_date_chart, n_days_chart)
                 if daily_df.empty:
-                    st.warning(f"{ts_code} 日线数据获取失败")
+                    st.warning(f"{ts_code} ????????")
                     continue
 
                 daily_buf = plot_daily_kline_with_indicators(daily_df, ts_code, stock_name)
-                st.image(daily_buf, caption=f"{stock_name} 日K线图", use_container_width=True)
+                st.image(daily_buf, caption=f"{stock_name} ???", use_container_width=True)
 
-                # 周K线
                 weekly_df = get_stock_weekly_kline(ts_code, end_date_chart, n_weeks=40)
                 weekly_buf = None
                 if not weekly_df.empty:
                     weekly_buf = plot_weekly_kline_with_indicators(weekly_df, ts_code, stock_name)
-                    st.image(weekly_buf, caption=f"{stock_name} 周K线图", use_container_width=True)
+                    st.image(weekly_buf, caption=f"{stock_name} ???", use_container_width=True)
 
-                # 保存图表数据供PDF下载
                 chart_results.append({
-                    'ts_code': ts_code,
-                    'name': stock_name,
-                    'daily_buf': daily_buf,
-                    'weekly_buf': weekly_buf,
-                    'stock_info': {
-                        'ts_code': ts_code,
-                        'name': stock_name,
-                        'signal_date': st.session_state.get('signal_date', end_date_chart),
-                        'board': '创业板' if ts_code.startswith('300') else '主板',
+                    "ts_code": ts_code,
+                    "name": stock_name,
+                    "daily_buf": daily_buf,
+                    "weekly_buf": weekly_buf,
+                    "stock_info": {
+                        "ts_code": ts_code,
+                        "name": stock_name,
+                        "signal_date": st.session_state.get("signal_date", end_date_chart),
+                        "board": "???" if ts_code.startswith("300") else "??",
                     }
                 })
 
-        # 保存到session state
         st.session_state.chart_results = chart_results
 
     # PDF下载区域
