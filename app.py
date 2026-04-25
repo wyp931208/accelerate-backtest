@@ -201,7 +201,9 @@ with tab1:
             "2. 降低累计涨幅下限（如10%）\n"
             "3. 降低上影线比例下限（如0.10）\n"
             "4. 取消「要求收盘高于VWAP」\n"
-            "5. 扩大日期范围以覆盖更多交易日")
+            "5. 扩大日期范围以覆盖更多交易日\n\n"
+            "📌 **日期说明**：为计算前N日累计涨幅，数据获取会自动从起始日期往前扩展N个交易日；"
+            "为保证持股周期完整，有效信号截止日会自动从结束日期往前缩减最大持股天数个交易日。")
     if st.button("🚀 开始回测", type="primary", use_container_width=True):
         params = {
             "buy_amount": buy_amount,
@@ -219,19 +221,60 @@ with tab1:
             "n_days_lookback": n_days_lookback,
             "cum_pct_chg_min": cum_pct_min,
             "cum_pct_chg_max": cum_pct_max,
-            "end_date": end_date.strftime('%Y%m%d'),
             "adj_type": adj_type,
         }
 
-        sd = start_date.strftime('%Y%m%d')
-        ed = end_date.strftime('%Y%m%d')
+        # ========== 计算数据获取的实际日期范围 ==========
+        # 1. 数据起始日期：往前扩展 n_days_lookback + 10 个交易日，确保累计涨幅有足够历史
+        # 2. 有效回测截止日期：从结束日期往前缩减 max_hold_days 个交易日，保证持股周期完整
+        cal_df = get_trade_calendar("20200101", end_date.strftime('%Y%m%d'))
+        if not cal_df.empty:
+            open_dates = cal_df[cal_df['is_open'] == 1]['cal_date'].sort_values().tolist()
+        else:
+            open_dates = []
+
+        # 计算数据获取起始日期：从用户选择的起始日期往前找 N+10 个交易日
+        sd_str = start_date.strftime('%Y%m%d')
+        if open_dates:
+            # 找到起始日期之前 N+10 个交易日
+            dates_before_start = [d for d in open_dates if d <= sd_str]
+            extend_count = n_days_lookback + 10
+            if len(dates_before_start) > extend_count:
+                data_start_date = dates_before_start[-extend_count - 1] if len(dates_before_start) > extend_count + 1 else dates_before_start[0]
+                # 更精确：取起始日期往前第 extend_count 个交易日
+                start_idx = len(dates_before_start) - 1  # 起始日期在列表中的位置
+                data_start_idx = max(0, start_idx - extend_count)
+                data_start_date = dates_before_start[data_start_idx]
+            else:
+                data_start_date = dates_before_start[0] if dates_before_start else sd_str
+        else:
+            data_start_date = sd_str
+
+        # 计算有效回测截止日期：从结束日期往前找 max_hold_days 个交易日
+        ed_str = end_date.strftime('%Y%m%d')
+        if open_dates:
+            dates_before_end = [d for d in open_dates if d <= ed_str]
+            if len(dates_before_end) > max_hold_days:
+                effective_end_idx = len(dates_before_end) - 1 - max_hold_days
+                effective_end_date = dates_before_end[max(0, effective_end_idx)]
+            else:
+                effective_end_date = dates_before_end[0] if dates_before_end else ed_str
+        else:
+            effective_end_date = ed_str
+
+        # 传入回测引擎的有效信号起止日期
+        params["start_date"] = sd_str
+        params["end_date"] = effective_end_date
 
         with st.spinner("正在获取数据并执行回测，请耐心等待..."):
-            daily = get_daily_data_with_info(sd, ed, adj_type=adj_type)
+            # 数据获取范围：从扩展后的起始日期到用户选择的结束日期
+            daily = get_daily_data_with_info(data_start_date, ed_str, adj_type=adj_type)
             if daily.empty:
                 st.error("获取数据失败，请检查Token和网络连接")
             else:
-                st.info(f"获取到 {len(daily)} 条日线数据")
+                st.info(f"获取到 {len(daily)} 条日线数据\n\n"
+                        f"📊 **数据范围**：{data_start_date} ~ {ed_str}（已向前扩展{n_days_lookback + 10}个交易日用于累计涨幅计算）\n"
+                        f"📈 **有效回测区间**：{sd_str} ~ {effective_end_date}（已排除最后{max_hold_days}个交易日以保证持股周期完整）")
 
                 def progress_cb(progress, text):
                     st.progress(progress, text=text)

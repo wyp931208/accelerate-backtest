@@ -346,7 +346,14 @@ def run_backtest(daily: pd.DataFrame, params: dict,
 
     # 信号识别
     signals = identify_signals(daily, params)
+
+    # 限定信号在有效回测区间内
+    # start_date: 有效回测起始日（用户选择的开始日期）
+    # end_date: 有效回测截止日（用户选择的结束日期 - max_hold_days个交易日，保证持股完整）
+    start_date = params.get("start_date", "")
     end_date = params.get("end_date", "20991231")
+    if start_date:
+        signals = signals[signals["trade_date"] >= pd.to_datetime(start_date)]
     signals = signals[signals["trade_date"] <= pd.to_datetime(end_date)]
 
     if signals.empty:
@@ -359,11 +366,20 @@ def run_backtest(daily: pd.DataFrame, params: dict,
         _us_max = params.get("upper_shadow_ratio_max", 0.5)
         _cum_min = params.get("cum_pct_chg_min", 20.0)
         _cum_max = params.get("cum_pct_chg_max", 100.0)
+        _n_days_lookback = params.get("n_days_lookback", 20)
         all_cyb = daily[daily["ts_code"].str.startswith("300")]
         cum_col = all_cyb["cum_pct_chg_N"] if "cum_pct_chg_N" in all_cyb.columns else pd.Series(dtype=float)
         cum_valid = cum_col.dropna()
+        # 每只股票记录数统计
+        cyb_rec_counts = all_cyb.groupby('ts_code').size() if len(all_cyb) > 0 else pd.Series(dtype=int)
         diag = {
+            "全数据总记录数": len(daily),
+            "全数据股票数": daily["ts_code"].nunique() if len(daily) > 0 else 0,
             "创业板总记录": len(all_cyb),
+            "创业板股票数": all_cyb["ts_code"].nunique() if len(all_cyb) > 0 else 0,
+            "每只股票平均记录数": f"{cyb_rec_counts.mean():.1f}" if len(cyb_rec_counts) > 0 else "0",
+            "每只股票最少记录数": f"{cyb_rec_counts.min()}" if len(cyb_rec_counts) > 0 else "0",
+            f"shift({_n_days_lookback})后非NaN记录": len(cum_valid),
             "非ST": len(all_cyb[~all_cyb["is_st"]]),
             "非次新股": len(all_cyb[~all_cyb["is_new"]]),
             "非停牌": len(all_cyb[~all_cyb["is_suspended"]]),
@@ -378,8 +394,6 @@ def run_backtest(daily: pd.DataFrame, params: dict,
             f"累计涨幅最大值": f"{cum_valid.max():.2f}" if len(cum_valid) > 0 else "无有效值",
             f"累计涨幅>{_cum_min}%": len(all_cyb[all_cyb["cum_pct_chg_N"] > _cum_min]) if "cum_pct_chg_N" in all_cyb.columns else 0,
             f"累计涨幅<={_cum_max}%": len(all_cyb[all_cyb["cum_pct_chg_N"] <= _cum_max]) if "cum_pct_chg_N" in all_cyb.columns else 0,
-            "每只股票平均记录数": f"{all_cyb.groupby('ts_code').size().mean():.1f}" if len(all_cyb) > 0 else "0",
-            "创业板股票数": all_cyb["ts_code"].nunique() if len(all_cyb) > 0 else 0,
         }
         diag_msg = "信号筛选诊断（创业板逐条件过滤后剩余数量）：\n"
         for k, v in diag.items():
