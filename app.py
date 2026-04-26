@@ -421,12 +421,32 @@ with tab1:
                     if "补仓价格" in display_df.columns:
                         format_dict["补仓价格"] = lambda x: f"{x:.3f}" if x != "" and not pd.isna(x) else ""
 
-                    st.dataframe(
-                        display_df.style.format(format_dict, na_rep=""),
-                        use_container_width=True,
-                        hide_index=True,
-                        height=min(600, max(200, len(display_df) * 35 + 50))
-                    )
+                    max_styler_cells = 20000
+                    table_height = min(600, max(200, len(display_df) * 35 + 50))
+                    if len(display_df) * max(len(display_df.columns), 1) <= max_styler_cells:
+                        st.dataframe(
+                            display_df.style.format(format_dict, na_rep=""),
+                            use_container_width=True,
+                            hide_index=True,
+                            height=table_height
+                        )
+                    else:
+                        display_render_df = display_df.copy()
+                        for col, fmt in format_dict.items():
+                            if col not in display_render_df.columns:
+                                continue
+                            if callable(fmt):
+                                display_render_df[col] = display_render_df[col].map(fmt)
+                            else:
+                                display_render_df[col] = display_render_df[col].map(
+                                    lambda x, f=fmt: "" if x == "" or pd.isna(x) else f.format(x)
+                                )
+                        st.dataframe(
+                            display_render_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            height=table_height
+                        )
                 else:
                     st.info("当前筛选条件下无交易记录")
 
