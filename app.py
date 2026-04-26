@@ -40,9 +40,13 @@ if 'tushare_token' not in st.session_state:
     st.session_state.tushare_token = DEFAULT_TOKEN
 if 'backtest_results' not in st.session_state:
     st.session_state.backtest_results = None
+if 'signal_date_default' not in st.session_state:
+    st.session_state.signal_date_default = None
 
 latest_trade_date_str = get_latest_trade_date()
 latest_trade_date_dt = datetime.strptime(latest_trade_date_str, '%Y%m%d').date()
+if st.session_state.signal_date_default is None or st.session_state.signal_date_default > latest_trade_date_dt:
+    st.session_state.signal_date_default = latest_trade_date_dt
 
 # ======================
 # 侧边栏 - Token配置
@@ -489,6 +493,8 @@ with tab2:
             sig_pct_max = st.number_input("涨跌幅上限(%)", value=8.0, step=0.5, key="sig_pct_max")
         with col_s2:
             st.markdown("**上影线与累计涨幅**")
+            sig_us_min = st.number_input("?????", value=0.25, step=0.05, format="%.2f", key="sig_us_min")
+            sig_us_max = st.number_input("?????", value=0.50, step=0.05, format="%.2f", key="sig_us_max")
             sig_req_cum_pct = st.checkbox("要求前N日累计涨幅", value=True, key="sig_req_cum_pct",
                                           help="启用后将筛选前N日累计涨幅在指定范围内的股票")
             sig_cum_min = st.number_input("累计涨幅下限(%)", min_value=-100.0, max_value=100.0, value=0.0, step=5.0, key="sig_cum_min",
@@ -507,23 +513,24 @@ with tab2:
             )
 
     latest_td = latest_trade_date_str
-    st.info(f"数据最新可用交易日: **{latest_td}**")
+    st.info(f"?????????: **{latest_td}**")
 
     col_date1, col_date2 = st.columns([3, 1])
     with col_date1:
         signal_date_dt = st.date_input(
-            "检测日期",
-            value=latest_trade_date_dt,
-            max_value=latest_trade_date_dt,
-            key="sig_date"
+            "????",
+            value=st.session_state.signal_date_default,
+            max_value=latest_trade_date_dt
         )
+        st.session_state.signal_date_default = signal_date_dt
         signal_date = signal_date_dt.strftime("%Y%m%d")
     with col_date2:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 使用最新日期"):
-            st.session_state.sig_date = latest_trade_date_dt
+        if st.button("?? ??????"):
+            st.session_state.signal_date_default = latest_trade_date_dt
             st.rerun()
 
+    if st.button("?? ????", type="primary", use_container_width=True):
         sig_params = {
             "volume_ratio_min": sig_vr_min,
             "volume_ratio_max": sig_vr_max,
