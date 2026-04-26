@@ -513,8 +513,8 @@ with tab2:
             sig_pct_max = st.number_input("涨跌幅上限(%)", value=8.0, step=0.5, key="sig_pct_max")
         with col_s2:
             st.markdown("**上影线与累计涨幅**")
-            sig_us_min = st.number_input("?????", value=0.25, step=0.05, format="%.2f", key="sig_us_min")
-            sig_us_max = st.number_input("?????", value=0.50, step=0.05, format="%.2f", key="sig_us_max")
+            sig_us_min = st.number_input("上影线下限", value=0.25, step=0.05, format="%.2f", key="sig_us_min")
+            sig_us_max = st.number_input("上影线上限", value=0.50, step=0.05, format="%.2f", key="sig_us_max")
             sig_req_cum_pct = st.checkbox("要求前N日累计涨幅", value=True, key="sig_req_cum_pct",
                                           help="启用后将筛选前N日累计涨幅在指定范围内的股票")
             sig_cum_min = st.number_input("累计涨幅下限(%)", min_value=-100.0, max_value=100.0, value=0.0, step=5.0, key="sig_cum_min",
@@ -533,12 +533,12 @@ with tab2:
             )
 
     latest_td = latest_trade_date_str
-    st.info(f"?????????: **{latest_td}**")
+    st.info(f"数据最新可用交易日: **{latest_td}**")
 
     col_date1, col_date2 = st.columns([3, 1])
     with col_date1:
         signal_date_dt = st.date_input(
-            "????",
+            "检测日期",
             value=st.session_state.signal_date_default,
             max_value=latest_trade_date_dt
         )
@@ -546,11 +546,11 @@ with tab2:
         signal_date = signal_date_dt.strftime("%Y%m%d")
     with col_date2:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("?? ??????"):
+        if st.button("🔄 使用最新日期"):
             st.session_state.signal_date_default = latest_trade_date_dt
             st.rerun()
 
-    if st.button("?? ????", type="primary", use_container_width=True):
+    if st.button("🔍 检测信号", type="primary", use_container_width=True):
         sig_params = {
             "volume_ratio_min": sig_vr_min,
             "volume_ratio_max": sig_vr_max,
